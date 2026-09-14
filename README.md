@@ -47,7 +47,7 @@ run-shell ~/.tmux/plugins/tmux-pi-session-manager/tmux-pi-session-manager.tmux
 |-----|--------|
 | `prefix + y` | Launch a new PI session for the current pane's directory |
 | `prefix + u` | Open the session picker (`fzf`) for the current workspace |
-| `prefix + o` | Open the global orchestrator view (all workspaces) |
+| `prefix + O` | Open the global orchestrator view (all workspaces) |
 
 ### Picker controls
 
@@ -198,7 +198,7 @@ Disabled by setting `@pi_forward_bell off`.
 | `@pi_signal_dir` | `~/.tmux-pi-session-manager/signals` | Directory for agent status files |
 | `@pi_launch_key` | `y` | Key binding to launch a session |
 | `@pi_list_key` | `u` | Key binding to open the picker |
-| `@pi_orch_key` | `o` | Key binding to open the global orchestrator view |
+| `@pi_orch_key` | `O` | Key binding to open the global orchestrator view |
 | `@pi_forward_bell` | `on` | Forward bell events from PI sessions to their origin windows |
 | `@pi_fzf_options` | `''` | Extra fzf options |
 | `@pi_status_indicator` | `on` | Show PI session status in tmux status-right |

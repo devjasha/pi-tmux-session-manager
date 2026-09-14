@@ -11,7 +11,7 @@ CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 launch_key="$(get_tmux_option @pi_launch_key 'y')"
 list_key="$(get_tmux_option @pi_list_key 'u')"
-orch_key="$(get_tmux_option @pi_orch_key 'o')"
+orch_key="$(get_tmux_option @pi_orch_key 'O')"
 
 # Launch (or re-attach to) a PI session for the current pane's directory.
 # #{pane_current_path} / #{window_id} are expanded by run-shell before the args
