@@ -65,7 +65,6 @@ if [ -n "$workspace_display" ] && [ "${workspace_display#"$home"}" != "$workspac
   workspace_display="~${workspace_display#"$HOME"}"
 fi
 header="PI agents · enter: jump · ctrl-x: kill"
-[ -n "$workspace_display" ] && header="${header}   📁 ${workspace_display}"
 
 # ctrl-x kills the PI process itself: a dedicated session dies with its last
 # window, while a loose pane keeps the shell that hosted it. The reload waits a
@@ -76,10 +75,26 @@ if [ "$collision_count" -gt 0 ]; then
   header="${header}   ⚠️ ${collision_count} collision(s)"
 fi
 
-sel=$(if [ -n "$list_out" ]; then printf '%s\n' "$list_out"; else :; fi | fzf --ansi --delimiter='\t' --with-nth=6,7,8,9 \
-  --reverse --cycle --header="$header" \
-  --preview='tmux capture-pane -ept {2}' --preview-window='right,50%,follow' \
-  --bind="ctrl-x:execute-silent(kill {3})+reload(sleep 0.3; $reload_list)" \
+# Build footer with wrapped workspace text (bottom-left placement via --footer)
+footer=""
+if [ -n "$workspace_display" ]; then
+  cols=$(tput cols 2>/dev/null || echo 80)
+  max_width=$((cols - 4))
+  footer=$(printf '📁 %s' "$workspace_display" | fold -s -w "$max_width")
+fi
+
+fzf_base_opts=(
+  --ansi --delimiter='\t' --with-nth=6,7,8,9
+  --reverse --cycle
+  --header="$header"
+  --wrap=word
+  --preview='tmux capture-pane -ept {2}'
+  --preview-window='right,50%,follow'
+  --bind="ctrl-x:execute-silent(kill {3})+reload(sleep 0.3; $reload_list)"
+)
+[ -n "$footer" ] && fzf_base_opts+=(--footer="$footer")
+
+sel=$(if [ -n "$list_out" ]; then printf '%s\n' "$list_out"; else :; fi | fzf "${fzf_base_opts[@]}" \
   ${sync_opts[@]+"${sync_opts[@]}"} \
   ${extra_opts[@]+"${extra_opts[@]}"})
 
