@@ -47,12 +47,14 @@ run-shell ~/.tmux/plugins/tmux-pi-session-manager/tmux-pi-session-manager.tmux
 |-----|--------|
 | `prefix + y` | Launch a new PI session for the current pane's directory |
 | `prefix + u` | Open the session picker (`fzf`) for the current workspace |
+| `prefix + o` | Open the global orchestrator view (all workspaces) |
 
 ### Picker controls
 
 | Key | Action |
 |-----|--------|
 | `Enter` | Jump to the selected agent |
+| `Ctrl-p` | Pause or resume the selected agent |
 | `Ctrl-x` | Kill the selected agent |
 | `Ctrl-c` | Close the picker |
 
@@ -77,8 +79,9 @@ Each row in the picker shows:
 
 | Column | Description |
 |--------|-------------|
-| ● status | **Red** = actively working (process running), **Yellow** = waiting for input, **Green** = idle (process finished) |
+| ● status | **Red** = actively working, **Yellow** = waiting for input, **Green** = idle, **Purple ⏸** = paused |
 | `+N` | Sub-agent count (small gray badge when the PI agent has spawned child agents) |
+| task | Optional task description set via the orchestrator |
 | Age | Minutes since the session was launched |
 | Location | tmux `session:window.pane` where the agent lives |
 | Path | Working directory (with `~` shorthand for home) plus git branch info |
@@ -94,6 +97,63 @@ their rows are marked with a `⚠️` collision badge and the picker header show
 the total number of colliding agents. This makes it easy to spot when multiple
 agents are operating in the same workspace so you can avoid stepping on each
 other's changes.
+
+## Orchestrator
+
+The orchestrator gives you lifecycle control over every running PI agent
+regardless of which workspace launched it.
+
+### Global view (`prefix + o`)
+
+`prefix + o` opens the same picker as `prefix + u`, but it shows **all**
+managed PI sessions across every workspace. It also refreshes each session's
+health status before opening so the state is current.
+
+### Pause and resume
+
+Press `Ctrl-p` on any row in the picker to toggle pause / resume for that
+agent. When paused, the pi process receives `SIGSTOP`; when resumed, it receives
+`SIGCONT`. The pause state is persisted in the signal file so it survives
+picker refreshes.
+
+Paused agents are excluded from the status-bar indicator because they do not
+need attention.
+
+### Task descriptions
+
+You can annotate an agent with a task description. This appears in the picker
+next to the status icon so you remember what each agent is working on.
+
+### Command-line orchestrator
+
+Every orchestrator action is also available as a shell command via
+`scripts/orch.sh`:
+
+```bash
+# Refresh cached status for all sessions
+orch.sh health
+
+# Pause / resume / toggle a session
+orch.sh pause pi-abc123
+orch.sh resume pi-abc123
+orch.sh toggle pi-abc123
+
+# Kill a session (escalates SIGTERM → SIGKILL)
+orch.sh kill pi-abc123
+
+# Queue input to send when the agent is idle
+orch.sh queue pi-abc123 "Implement user auth"
+orch.sh send pi-abc123
+
+# Set a task description
+orch.sh set-task pi-abc123 "Refactor login flow"
+
+# Show detailed JSON status
+orch.sh status pi-abc123
+
+# Remove stale signal files
+orch.sh cleanup
+```
 
 ## Status-bar indicator
 
@@ -138,6 +198,7 @@ Disabled by setting `@pi_forward_bell off`.
 | `@pi_signal_dir` | `~/.tmux-pi-session-manager/signals` | Directory for agent status files |
 | `@pi_launch_key` | `y` | Key binding to launch a session |
 | `@pi_list_key` | `u` | Key binding to open the picker |
+| `@pi_orch_key` | `o` | Key binding to open the global orchestrator view |
 | `@pi_forward_bell` | `on` | Forward bell events from PI sessions to their origin windows |
 | `@pi_fzf_options` | `''` | Extra fzf options |
 | `@pi_status_indicator` | `on` | Show PI session status in tmux status-right |

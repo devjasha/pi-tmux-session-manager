@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Status-bar indicator for PI sessions that need attention.
 # Outputs a compact tmux-formatted string meant for status-right.
+#
+# Prefers cached status from the signal file when fresh (< 60 s);
+# otherwise falls back to live process inspection.
+# Paused sessions are excluded because they do not need attention.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=helpers.sh
@@ -68,6 +72,7 @@ pane_is_state() {
 
 waiting=0
 idle=0
+now=$(date +%s)
 
 for signal in "$signal_dir"/*.signal; do
   [ -f "$signal" ] || continue
@@ -75,28 +80,55 @@ for signal in "$signal_dir"/*.signal; do
   if command -v jq >/dev/null 2>&1; then
     session=$(jq -r '.session // empty' "$signal" 2>/dev/null)
     pane_id=$(jq -r '.pane_id // empty' "$signal" 2>/dev/null)
+    cached_status=$(jq -r '.status // empty' "$signal" 2>/dev/null)
+    cached_status_at=$(jq -r '.status_at // 0' "$signal" 2>/dev/null)
+    orch_state=$(jq -r '.orch.desired_state // "active"' "$signal" 2>/dev/null)
   else
     session=$(sed -n 's/.*"session": "\([^"]*\)".*/\1/p' "$signal")
     pane_id=$(sed -n 's/.*"pane_id": "\([^"]*\)".*/\1/p' "$signal")
+    cached_status=""
+    cached_status_at=0
+    orch_state="active"
   fi
 
   [ -z "$session" ] && continue
   [ -z "$pane_id" ] && continue
+
+  # Skip paused sessions; they do not need attention.
+  if [ "$orch_state" = "paused" ]; then
+    continue
+  fi
 
   if ! tmux has-session -t "$session" 2>/dev/null; then
     rm -f "$signal" 2>/dev/null
     continue
   fi
 
-  pane_pid=$(tmux list-panes -t "$session" -F '#{pane_pid} #{pane_id}' 2>/dev/null |
-             awk -v pid="$pane_id" '$2 == pid { print $1; exit }')
-  [ -z "$pane_pid" ] && continue
-
-  if pane_is_state "$pane_pid" "waiting"; then
-    waiting=$((waiting + 1))
-  elif pane_is_state "$pane_pid" "idle"; then
-    idle=$((idle + 1))
+  # Prefer cached status when fresh (< 60 s).
+  status=""
+  if [ -n "$cached_status" ] && [ -n "$cached_status_at" ] && \
+     [ "$((now - cached_status_at))" -lt 60 ] 2>/dev/null; then
+    status="$cached_status"
   fi
+
+  if [ -z "$status" ]; then
+    pane_pid=$(tmux list-panes -t "$session" -F '#{pane_pid} #{pane_id}' 2>/dev/null |
+               awk -v pid="$pane_id" '$2 == pid { print $1; exit }')
+    [ -z "$pane_pid" ] && continue
+
+    if pane_is_state "$pane_pid" "waiting"; then
+      status="waiting"
+    elif pane_is_state "$pane_pid" "idle"; then
+      status="idle"
+    else
+      status="working"
+    fi
+  fi
+
+  case "$status" in
+    waiting) waiting=$((waiting + 1)) ;;
+    idle)    idle=$((idle + 1)) ;;
+  esac
 done
 
 out=""

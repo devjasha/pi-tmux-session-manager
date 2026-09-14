@@ -64,7 +64,7 @@ home="$HOME"
 if [ -n "$workspace_display" ] && [ "${workspace_display#"$home"}" != "$workspace_display" ]; then
   workspace_display="~${workspace_display#"$HOME"}"
 fi
-header="PI agents · enter: jump · ctrl-x: kill"
+header="PI agents · enter: jump · ctrl-p: pause/resume · ctrl-x: kill"
 
 # ctrl-x kills the PI process itself: a dedicated session dies with its last
 # window, while a loose pane keeps the shell that hosted it. The reload waits a
@@ -90,6 +90,7 @@ fzf_base_opts=(
   --wrap=word
   --preview='tmux capture-pane -ept {2}'
   --preview-window='right,50%,follow'
+  --bind='ctrl-p:execute-silent("'"$DIR"'/orch.sh" toggle "{11}")+reload(sleep 0.3; '"$reload_list"')'
   --bind="ctrl-x:execute-silent(kill {3})+reload(sleep 0.3; $reload_list)"
 )
 [ -n "$footer" ] && fzf_base_opts+=(--footer="$footer")

@@ -11,6 +11,7 @@ CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 launch_key="$(get_tmux_option @pi_launch_key 'y')"
 list_key="$(get_tmux_option @pi_list_key 'u')"
+orch_key="$(get_tmux_option @pi_orch_key 'o')"
 
 # Launch (or re-attach to) a PI session for the current pane's directory.
 # #{pane_current_path} / #{window_id} are expanded by run-shell before the args
@@ -22,6 +23,10 @@ tmux bind-key "$launch_key" \
 # closes that popup first so the picker opens full-size on the outer client.
 tmux bind-key "$list_key" \
   run-shell "$CURRENT_DIR/scripts/list.sh '#{q:client_name}' '#{q:pane_current_path}'"
+
+# Global orchestrator view: all agents across all workspaces.
+tmux bind-key "$orch_key" \
+  run-shell "$CURRENT_DIR/scripts/orch-menu.sh"
 
 # Forward a bell from a dedicated session to its origin window's pane, so
 # tmux's own bell machinery (window-status-bell-style, and terminal

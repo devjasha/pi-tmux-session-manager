@@ -45,6 +45,7 @@ pane_id=$(tmux display-message -p -t "$session" '#{pane_id}')
 # Create signal file
 signal_file="${signal_dir}/${session}.signal"
 origin_window="${window:-$(tmux display-message -p '#{window_id}')}"
+ts=$(date +%s)
 cat > "$signal_file" <<EOJSON
 {
   "session": "${session}",
@@ -52,7 +53,16 @@ cat > "$signal_file" <<EOJSON
   "workspace": "${workspace}",
   "origin": "${origin_window}",
   "pane_id": "${pane_id}",
-  "created_at": $(date +%s)
+  "created_at": $ts,
+  "pid": null,
+  "status": "working",
+  "status_at": $ts,
+  "orch": {
+    "desired_state": "active",
+    "paused_at": null,
+    "task": "",
+    "queue_length": 0
+  }
 }
 EOJSON
 

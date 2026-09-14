@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Emit one picker row per PI session based on signal files.
 #
-# Status is inferred live from the process running in the pane:
+# Status is read from the signal file cache when fresh (< 60 s old);
+# otherwise it falls back to live process inspection.
 #   working  pi is actively running (R state)
 #   waiting  pi is sleeping/blocked (S/D state) — likely waiting for input
 #   idle     pi is no longer running in the pane
@@ -62,6 +63,57 @@ pi_state_from_pane_pid() {
   return 1
 }
 
+# Resolve the actual pi PID rooted at a pane PID.
+resolve_pi_pid() {
+  local pane_pid="$1"
+  local pid
+
+  # Direct
+  if [ "$(ps -o comm= -p "$pane_pid" 2>/dev/null | tr -d ' ')" = "pi" ]; then
+    printf '%s' "$pane_pid"
+    return 0
+  fi
+
+  # Depth 1
+  for pid in $(pgrep -P "$pane_pid" 2>/dev/null); do
+    if [ "$(ps -o comm= -p "$pid" 2>/dev/null | tr -d ' ')" = "pi" ]; then
+      printf '%s' "$pid"
+      return 0
+    fi
+  done
+
+  # Depth 2
+  for pid in $(pgrep -P "$pane_pid" 2>/dev/null); do
+    for child in $(pgrep -P "$pid" 2>/dev/null); do
+      if [ "$(ps -o comm= -p "$child" 2>/dev/null | tr -d ' ')" = "pi" ]; then
+        printf '%s' "$child"
+        return 0
+      fi
+    done
+  done
+
+  printf '%s' "$pane_pid"
+}
+
+# Count descendant pi processes as a proxy for active sub-agents.
+subagent_count() {
+  local parent="$1"
+  local count=0
+  local child grandchild
+  for child in $(pgrep -P "$parent" 2>/dev/null); do
+    if [ "$(ps -o comm= -p "$child" 2>/dev/null | tr -d ' ')" = "pi" ]; then
+      count=$((count + 1))
+      continue
+    fi
+    for grandchild in $(pgrep -P "$child" 2>/dev/null); do
+      if [ "$(ps -o comm= -p "$grandchild" 2>/dev/null | tr -d ' ')" = "pi" ]; then
+        count=$((count + 1))
+      fi
+    done
+  done
+  printf '%s' "$count"
+}
+
 tmpfile=$(mktemp)
 trap 'rm -f "$tmpfile"' EXIT
 
@@ -69,12 +121,17 @@ for signal in "$signal_dir"/*.signal; do
   [ -f "$signal" ] || continue
 
   if command -v jq >/dev/null 2>&1; then
-    session=$(jq -r '.session' "$signal" 2>/dev/null)
-    pane_id=$(jq -r '.pane_id' "$signal" 2>/dev/null)
-    cwd=$(jq -r '.cwd' "$signal" 2>/dev/null)
-    workspace=$(jq -r '.workspace // .cwd' "$signal" 2>/dev/null)
-    origin=$(jq -r '.origin' "$signal" 2>/dev/null)
-    created_at=$(jq -r '.created_at' "$signal" 2>/dev/null)
+    session=$(jq -r '.session // empty' "$signal" 2>/dev/null)
+    pane_id=$(jq -r '.pane_id // empty' "$signal" 2>/dev/null)
+    cwd=$(jq -r '.cwd // empty' "$signal" 2>/dev/null)
+    workspace=$(jq -r '.workspace // .cwd // empty' "$signal" 2>/dev/null)
+    origin=$(jq -r '.origin // empty' "$signal" 2>/dev/null)
+    created_at=$(jq -r '.created_at // empty' "$signal" 2>/dev/null)
+    cached_pid=$(jq -r '.pid // empty' "$signal" 2>/dev/null)
+    cached_status=$(jq -r '.status // empty' "$signal" 2>/dev/null)
+    cached_status_at=$(jq -r '.status_at // 0' "$signal" 2>/dev/null)
+    orch_state=$(jq -r '.orch.desired_state // "active"' "$signal" 2>/dev/null)
+    orch_task=$(jq -r '.orch.task // empty' "$signal" 2>/dev/null)
   else
     session=$(sed -n 's/.*"session": "\([^"]*\)".*/\1/p' "$signal")
     pane_id=$(sed -n 's/.*"pane_id": "\([^"]*\)".*/\1/p' "$signal")
@@ -83,6 +140,11 @@ for signal in "$signal_dir"/*.signal; do
     [ -n "$workspace" ] || workspace="$cwd"
     origin=$(sed -n 's/.*"origin": "\([^"]*\)".*/\1/p' "$signal")
     created_at=$(sed -n 's/.*"created_at": \([0-9]*\).*/\1/p' "$signal")
+    cached_pid=""
+    cached_status=""
+    cached_status_at=0
+    orch_state="active"
+    orch_task=""
   fi
 
   [ -z "$session" ] && continue
@@ -101,65 +163,44 @@ for signal in "$signal_dir"/*.signal; do
     continue
   fi
 
-  # PID from tmux is the shell that owns the pane; resolve to pi if nested
   pane_pid=$(tmux list-panes -t "$session" -F '#{pane_pid} #{pane_id}' 2>/dev/null |
              awk -v pid="$pane_id" '$2 == pid { print $1; exit }')
   [ -z "$pane_pid" ] && continue
 
-  state=$(pi_state_from_pane_pid "$pane_pid")
-  if [ -n "$state" ]; then
-    case "$state" in
-      R*) status="working" ;;
-      *)  status="waiting" ;;
-    esac
-  else
-    status="idle"
+  # Prefer cached status when fresh (< 60 s) and the cached PID still exists.
+  now=$(date +%s)
+  use_cache=""
+  if [ -n "$cached_status" ] && [ -n "$cached_status_at" ] && \
+     [ "$((now - cached_status_at))" -lt 60 ] 2>/dev/null; then
+    if [ -n "$cached_pid" ] && [ "$cached_pid" != "null" ] && \
+       kill -0 "$cached_pid" 2>/dev/null; then
+      use_cache=1
+    elif [ -z "$cached_pid" ] || [ "$cached_pid" = "null" ]; then
+      # Cache says idle, so no PID expected.
+      use_cache=1
+    fi
   fi
 
-  # Resolve the actual pi PID for the kill binding (fall back to pane PID)
-  pid="$pane_pid"
-  for p in $(pgrep -P "$pane_pid" 2>/dev/null); do
-    if [ "$(ps -o comm= -p "$p" 2>/dev/null | tr -d ' ')" = "pi" ]; then
-      pid="$p"
-      break
+  if [ -n "$use_cache" ]; then
+    status="$cached_status"
+    pid="${cached_pid:-$pane_pid}"
+  else
+    state=$(pi_state_from_pane_pid "$pane_pid")
+    if [ -n "$state" ]; then
+      case "$state" in
+        R*) status="working" ;;
+        *)  status="waiting" ;;
+      esac
+    else
+      status="idle"
     fi
-  done
-  # Try one level deeper if still not found
-  if [ "$pid" = "$pane_pid" ]; then
-    for p in $(pgrep -P "$pane_pid" 2>/dev/null); do
-      for c in $(pgrep -P "$p" 2>/dev/null); do
-        if [ "$(ps -o comm= -p "$c" 2>/dev/null | tr -d ' ')" = "pi" ]; then
-          pid="$c"
-          break 2
-        fi
-      done
-    done
+    pid="$(resolve_pi_pid "$pane_pid")"
   fi
 
   kind="dedicated"
 
-  # Count descendant pi processes as a proxy for active sub-agents.
-  # We search depth 1 and 2 (same pattern as pi_state_from_pane_pid).
-  subagent_count() {
-    local parent="$1"
-    local count=0
-    local child grandchild
-    for child in $(pgrep -P "$parent" 2>/dev/null); do
-      if [ "$(ps -o comm= -p "$child" 2>/dev/null | tr -d ' ')" = "pi" ]; then
-        count=$((count + 1))
-        continue
-      fi
-      for grandchild in $(pgrep -P "$child" 2>/dev/null); do
-        if [ "$(ps -o comm= -p "$grandchild" 2>/dev/null | tr -d ' ')" = "pi" ]; then
-          count=$((count + 1))
-        fi
-      done
-    done
-    echo "$count"
-  }
-
   sub_badge=""
-  if [ "$pid" != "$pane_pid" ]; then
+  if [ "$pid" != "$pane_pid" ] && [ -n "$pid" ]; then
     sa_count=$(subagent_count "$pid")
     if [ "${sa_count:-0}" -gt 0 ] 2>/dev/null; then
       sub_badge=$'  \033[2;90m+'"${sa_count}"$'\033[0m'
@@ -184,9 +225,19 @@ for signal in "$signal_dir"/*.signal; do
       rank=2
       ;;
   esac
-  icon="${icon}${sub_badge}"
 
-  now=$(date +%s)
+  # Pause badge
+  if [ "$orch_state" = "paused" ]; then
+    icon=$'\033[35m⏸\033[0m '"$icon"
+    rank=4
+  fi
+
+  # Task annotation
+  task_badge=""
+  [ -n "$orch_task" ] && task_badge="  [${orch_task}]"
+
+  icon="${icon}${sub_badge}${task_badge}"
+
   if [ "$created_at" -gt 0 ] 2>/dev/null; then
     age_minutes=$(((now - created_at) / 60))
     age="${age_minutes}m"
@@ -207,7 +258,7 @@ for signal in "$signal_dir"/*.signal; do
 
   home="$HOME"
   if [ "${cwd#"$home"}" != "$cwd" ]; then
-    path="~${cwd#"$home"}"
+    path="~${cwd#"$HOME"}"
   else
     path="$cwd"
   fi
@@ -225,8 +276,8 @@ for signal in "$signal_dir"/*.signal; do
   fi
   [ -n "$branch" ] && path="$path [${branch}]"
 
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%5s\t%s\t%s\t%s\n' \
-    "$rank" "$pane_id" "$pid" "$kind" "$workspace" "$icon" "$age" "$loc" "$path" "$worktree_path" >> "$tmpfile"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%5s\t%s\t%s\t%s\t%s\n' \
+    "$rank" "$pane_id" "$pid" "$kind" "$workspace" "$icon" "$age" "$loc" "$path" "$worktree_path" "$session" >> "$tmpfile"
 done
 
 # Detect collisions: more than one agent in the same git worktree
@@ -241,9 +292,9 @@ END {
     if (field[i, 10] != "" && count[field[i, 10]] > 1) {
       field[i, 6] = "⚠️  " field[i, 6]
     }
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%5s\t%s\t%s\t%s\n",
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%5s\t%s\t%s\t%s\t%s\n",
       field[i, 1], field[i, 2], field[i, 3], field[i, 4], field[i, 5],
-      field[i, 6], field[i, 7], field[i, 8], field[i, 9], field[i, 10]
+      field[i, 6], field[i, 7], field[i, 8], field[i, 9], field[i, 10], field[i, 11]
   }
 }' "$tmpfile" | sort -t$'\t' -k1,1n -k6,6n
 
