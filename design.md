@@ -9,6 +9,9 @@ Each signal file is a JSON object with the following fields:
 
 - `session`: string, the tmux session name (e.g., "pi-a1b2c3d4")
 - `cwd`: string, the current working directory where the PI session was launched
+- `workspace`: string, the directory used as the workspace scope for this session.
+  This is set to the pane's current path at launch time and drives the picker
+  filter so `prefix + u` shows only sessions from the same workspace.
 - `origin`: string, the tmux window ID from which the launcher was invoked (we store this for compatibility and to set the session option @pi_origin).
 - `pane_id`: string, the tmux pane ID where the PI process is running (the initial pane of the session).
 - `created_at`: integer, Unix timestamp when the signal file was created.
@@ -23,6 +26,7 @@ Each signal file is a JSON object with the following fields:
 {
   "session": "pi-a1b2c3d4",
   "cwd": "/home/yareliu/Projects/my-project",
+  "workspace": "/home/yareliu/Projects/my-project",
   "origin": "@1",
   "pane_id": "%0",
   "created_at": 1789155000,

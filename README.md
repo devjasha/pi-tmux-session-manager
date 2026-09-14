@@ -43,12 +43,24 @@ run-shell ~/.tmux/plugins/tmux-pi-session-manager/tmux-pi-session-manager.tmux
 | Key | Action |
 |-----|--------|
 | `prefix + y` | Launch (or re-attach to) a PI session for the current pane's directory |
-| `prefix + u` | Open the session picker (`fzf`) |
+| `prefix + u` | Open the session picker (`fzf`) for the current workspace |
 
 Inside the picker:
 - `Enter` — jump to the selected agent
 - `Ctrl-x` — kill the selected agent
 - `Ctrl-c` — close the picker
+
+## Workspaces
+
+Every PI session is scoped to a **workspace** — the directory you were in when
+you launched it with `prefix + y`. When you open the picker with `prefix + u`,
+it only shows sessions belonging to the same workspace as the pane you pressed
+it from. This keeps sessions organized per folder so you never see unrelated
+agents cluttering the list.
+
+*Example:* If you launch a session from `~/Projects/frontend` and later another
+from `~/Projects/backend`, pressing `prefix + u` inside `~/Projects/frontend`
+will show only the frontend session.
 
 ## Options
 

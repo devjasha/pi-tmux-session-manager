@@ -15,11 +15,16 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=helpers.sh
 . "$DIR/helpers.sh"
 
-cache="${TMPDIR:-/tmp}/tmux-pi-agents-$(id -u).cache"
+workspace="${1:-}"
+workspace="$(normalize_path "$workspace" 2>/dev/null || printf '%s' "$workspace")"
+cache="${TMPDIR:-/tmp}/tmux-pi-agents-v2-$(id -u).cache"
 
 if [ "${1:-}" = '--list' ]; then
+  # When called internally, shift workspace args so agents.sh gets the filter.
+  # $0 is the script path; $1 is --list; remaining args are workspace flags.
+  shift 1
   tmp="$cache.$$"
-  "$DIR/agents.sh" >"$tmp" 2>/dev/null
+  "$DIR/agents.sh" "$@" >"$tmp" 2>/dev/null
   mv -f "$tmp" "$cache" 2>/dev/null || rm -f "$tmp"
   cat "$cache" 2>/dev/null
   exit 0
@@ -40,24 +45,35 @@ extra_opts=()
 fzf_options="$(get_tmux_option @pi_fzf_options '')"
 [ -n "$fzf_options" ] && eval "extra_opts=($fzf_options)"
 
+reload_list="$self --list"
+[ -n "$workspace" ] && reload_list="$reload_list --workspace '$workspace'"
+
 # Load the session list asynchronously
-list_cmd=("$self" --list)
+list_cmd=("$self" --list ${workspace:+--workspace "$workspace"})
 sync_opts=()
 now=$(date +%s)
 mtime=$(file_mtime "$cache")
-if [ -s "$cache" ] && [ -n "$mtime" ] && [ $((now - mtime)) -lt 3600 ]; then
+if [ -z "$workspace" ] && [ -s "$cache" ] && [ -n "$mtime" ] && [ $((now - mtime)) -lt 3600 ]; then
   list_cmd=(cat "$cache")
-  sync_opts=("--bind" "load:unbind(load)+reload-sync($self --list)")
+  sync_opts=("--bind" "load:unbind(load)+reload-sync($reload_list)")
 fi
 fzf --track --version >/dev/null 2>&1 && sync_opts+=(--track)
+
+workspace_display="$workspace"
+home="$HOME"
+if [ -n "$workspace_display" ] && [ "${workspace_display#"$home"}" != "$workspace_display" ]; then
+  workspace_display="~${workspace_display#"$HOME"}"
+fi
+header="PI agents · enter: jump · ctrl-x: kill"
+[ -n "$workspace_display" ] && header="${header}   📁 ${workspace_display}"
 
 # ctrl-x kills the PI process itself: a dedicated session dies with its last
 # window, while a loose pane keeps the shell that hosted it. The reload waits a
 # beat so the process tree has settled.
-sel=$("${list_cmd[@]}" | fzf --ansi --delimiter='\t' --with-nth=5,6,7,8 \
-  --reverse --cycle --header='PI agents · enter: jump · ctrl-x: kill' \
-  --preview='tmux capture-pane -ept {2}' --preview-window='up,70%,follow' \
-  --bind="ctrl-x:execute-silent(kill {3})+reload(sleep 0.3; $self --list)" \
+sel=$("${list_cmd[@]}" | fzf --ansi --delimiter='\t' --with-nth=6,7,8,9 \
+  --reverse --cycle --header="$header" \
+  --preview='tmux capture-pane -ept {2}' --preview-window='right,50%,follow' \
+  --bind="ctrl-x:execute-silent(kill {3})+reload(sleep 0.3; $reload_list)" \
   ${sync_opts[@]+"${sync_opts[@]}"} \
   ${extra_opts[@]+"${extra_opts[@]}"})
 

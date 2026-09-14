@@ -7,15 +7,22 @@
 #   idle     pi is no longer running in the pane
 #
 # Output format (tab-separated):
-# rank \t pane_id \t pid \t kind \t icon \t age \t loc \t path
+# rank \t pane_id \t pid \t kind \t workspace \t icon \t age \t loc \t path
 #
-# rank/pane_id/pid/kind are hidden from the display via fzf's --with-nth.
+# rank/pane_id/pid/kind/workspace are hidden from the display via fzf's --with-nth.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=helpers.sh
 . "$DIR/helpers.sh"
 
 signal_dir="$(get_tmux_option @pi_signal_dir $HOME/.tmux-pi-session-manager/signals)"
+
+# Optional workspace filter
+workspace_filter=""
+if [ "${1:-}" = "--workspace" ] && [ -n "${2:-}" ]; then
+  workspace_filter="$(normalize_path "$2" 2>/dev/null || printf '%s' "$2")"
+  shift 2
+fi
 
 [ -d "$signal_dir" ] || exit 0
 
@@ -62,12 +69,15 @@ for signal in "$signal_dir"/*.signal; do
     session=$(jq -r '.session' "$signal" 2>/dev/null)
     pane_id=$(jq -r '.pane_id' "$signal" 2>/dev/null)
     cwd=$(jq -r '.cwd' "$signal" 2>/dev/null)
+    workspace=$(jq -r '.workspace // .cwd' "$signal" 2>/dev/null)
     origin=$(jq -r '.origin' "$signal" 2>/dev/null)
     created_at=$(jq -r '.created_at' "$signal" 2>/dev/null)
   else
     session=$(sed -n 's/.*"session": "\([^"]*\)".*/\1/p' "$signal")
     pane_id=$(sed -n 's/.*"pane_id": "\([^"]*\)".*/\1/p' "$signal")
     cwd=$(sed -n 's/.*"cwd": "\([^"]*\)".*/\1/p' "$signal")
+    workspace=$(sed -n 's/.*"workspace": "\([^"]*\)".*/\1/p' "$signal")
+    [ -n "$workspace" ] || workspace="$cwd"
     origin=$(sed -n 's/.*"origin": "\([^"]*\)".*/\1/p' "$signal")
     created_at=$(sed -n 's/.*"created_at": \([0-9]*\).*/\1/p' "$signal")
   fi
@@ -76,6 +86,11 @@ for signal in "$signal_dir"/*.signal; do
   [ -z "$pane_id" ] && continue
   [ -z "$cwd" ] && continue
   [ -z "$created_at" ] && continue
+
+  # Skip if workspace doesn't match the filter
+  if [ -n "$workspace_filter" ] && [ "$workspace" != "$workspace_filter" ]; then
+    continue
+  fi
 
   # Skip if the tmux session is gone (stale signal file)
   if ! tmux has-session -t "$session" 2>/dev/null; then
@@ -120,6 +135,34 @@ for signal in "$signal_dir"/*.signal; do
 
   kind="dedicated"
 
+  # Count descendant pi processes as a proxy for active sub-agents.
+  # We search depth 1 and 2 (same pattern as pi_state_from_pane_pid).
+  subagent_count() {
+    local parent="$1"
+    local count=0
+    local child grandchild
+    for child in $(pgrep -P "$parent" 2>/dev/null); do
+      if [ "$(ps -o comm= -p "$child" 2>/dev/null | tr -d ' ')" = "pi" ]; then
+        count=$((count + 1))
+        continue
+      fi
+      for grandchild in $(pgrep -P "$child" 2>/dev/null); do
+        if [ "$(ps -o comm= -p "$grandchild" 2>/dev/null | tr -d ' ')" = "pi" ]; then
+          count=$((count + 1))
+        fi
+      done
+    done
+    echo "$count"
+  }
+
+  sub_badge=""
+  if [ "$pid" != "$pane_pid" ]; then
+    sa_count=$(subagent_count "$pid")
+    if [ "${sa_count:-0}" -gt 0 ] 2>/dev/null; then
+      sub_badge=$'  \033[2;90m+'"${sa_count}"$'\033[0m'
+    fi
+  fi
+
   case "$status" in
     waiting)
       icon=$'\033[33m●\033[0m waiting'
@@ -138,6 +181,7 @@ for signal in "$signal_dir"/*.signal; do
       rank=2
       ;;
   esac
+  icon="${icon}${sub_badge}"
 
   now=$(date +%s)
   if [ "$created_at" -gt 0 ] 2>/dev/null; then
@@ -165,6 +209,6 @@ for signal in "$signal_dir"/*.signal; do
     path="$cwd"
   fi
 
-  printf '%s\t%s\t%s\t%s\t%s\t%5s\t%s\t%s\n' \
-    "$rank" "$pane_id" "$pid" "$kind" "$icon" "$age" "$loc" "$path"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%5s\t%s\t%s\n' \
+    "$rank" "$pane_id" "$pid" "$kind" "$workspace" "$icon" "$age" "$loc" "$path"
 done | sort -t$'\t' -k1,1n -k6,6n

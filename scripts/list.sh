@@ -18,18 +18,30 @@ me="${1:-}"
 my_session="$(tmux list-clients -F '#{client_name} #{session_name}' 2>/dev/null |
   awk -v me="$me" '$1 == me { print $2; exit }')"
 
+workspace="${2:-}"
+
+# Build the picker command, optionally passing the workspace filter.
+picker_cmd="$DIR/picker.sh"
+[ -n "$workspace" ] && picker_cmd="$picker_cmd '$workspace'"
+
 # open_picker <host>  — show the picker popup on <host>, or on the default client
 # when <host> is empty. Returns display-popup's own exit status.
 open_picker() {
   if [ -n "$1" ]; then
-    tmux display-popup -c "$1" -w "$w" -h "$h" -E "$DIR/picker.sh"
+    tmux display-popup -c "$1" -w "$w" -h "$h" -E "$picker_cmd"
   else
-    tmux display-popup -w "$w" -h "$h" -E "$DIR/picker.sh"
+    tmux display-popup -w "$w" -h "$h" -E "$picker_cmd"
   fi
 }
 
 case "$my_session" in
 "$prefix"*)
+  # Inside a session popup: read the workspace from the session before we
+  # detach, then reopen the picker filtered to that same workspace.
+  workspace="$(tmux show-options -qv -t "$my_session" @pi_workspace 2>/dev/null)"
+  picker_cmd="$DIR/picker.sh"
+  [ -n "$workspace" ] && picker_cmd="$picker_cmd '$workspace'"
+
   # Inside a session popup: close it, then reopen the picker on the outer client.
   #
   # display-popup returns to its caller *before* tmux finishes destroying the
@@ -63,6 +75,7 @@ case "$my_session" in
   # Normal case: this client is already the host, with no overlay to race.
   host="$me"
   tmux set-option -g @pi_parent "$host"
+  [ -n "$workspace" ] && workspace="$(normalize_path "$workspace" 2>/dev/null || printf '%s' "$workspace")"
   ;;
 esac
 

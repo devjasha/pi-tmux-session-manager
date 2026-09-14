@@ -31,6 +31,13 @@ session_hash() {
   printf '%s' "${out:0:8}"
 }
 
+# normalize_path <path>
+# Prints the absolute, symlink-resolved path of an existing directory.
+# Falls back to the input unchanged if the directory cannot be entered.
+normalize_path() {
+  (cd "$1" >/dev/null 2>&1 && pwd -P) || printf '%s' "$1"
+}
+
 # file_mtime <path>
 # Epoch seconds of a file's last modification. GNU stat (Linux) is tried first,
 # then BSD (macOS); each rejects the other's flag, so the fallback is unambiguous.

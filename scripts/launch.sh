@@ -22,6 +22,7 @@ signal_dir="$(get_tmux_option @pi_signal_dir $HOME/.tmux-pi-session-manager/sign
 mkdir -p "$signal_dir"
 
 session="${prefix}$(session_hash "$path")"
+workspace="$(normalize_path "$path")"
 
 # If we are already inside a popup session (i.e., the current session starts with the prefix), do not open another popup.
 if [[ "$(tmux display-message -p '#S')" == "$prefix"* ]]; then
@@ -47,6 +48,7 @@ if ! tmux has-session -t "$session" 2>/dev/null; then
 {
   "session": "${session}",
   "cwd": "${path}",
+  "workspace": "${workspace}",
   "origin": "${origin_window}",
   "pane_id": "${pane_id}",
   "created_at": $(date +%s)
@@ -69,6 +71,7 @@ else
 {
   "session": "${session}",
   "cwd": "${cwd}",
+  "workspace": "${workspace}",
   "origin": "${origin_window}",
   "pane_id": "${pane_id}",
   "created_at": $(date +%s)
@@ -80,6 +83,10 @@ fi
 # Record which window launched it, so the picker can jump back here later.
 # Store in session option @pi_origin (only if window is provided)
 [ -n "$window" ] && tmux set-option -t "$session" @pi_origin "$window"
+
+# Store workspace on the session so the picker can filter by it even
+# after the signal file may have been cleaned up.
+tmux set-option -t "$session" @pi_workspace "$workspace"
 
 # Attach to the session in a popup
 tmux display-popup -w "$w" -h "$h" -E "tmux attach-session -t '$session'"

@@ -21,7 +21,7 @@ tmux bind-key "$launch_key" \
 # Open the session picker. When pressed from inside a session popup, list.sh
 # closes that popup first so the picker opens full-size on the outer client.
 tmux bind-key "$list_key" \
-  run-shell "$CURRENT_DIR/scripts/list.sh '#{q:client_name}'"
+  run-shell "$CURRENT_DIR/scripts/list.sh '#{q:client_name}' '#{q:pane_current_path}'"
 
 # Forward a bell from a dedicated session to its origin window's pane, so
 # tmux's own bell machinery (window-status-bell-style, and terminal
