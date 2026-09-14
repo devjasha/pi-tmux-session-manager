@@ -1,8 +1,11 @@
+<img width="1604" height="1036" alt="Screenshot 2026-09-14 at 14 29 17" src="https://github.com/user-attachments/assets/885577cd-3849-477f-9920-b153a39fcd95" />
+
 # tmux-pi-session-manager
 
 Launch, list, monitor, and jump across [PI coding-agent](https://github.com/earendil-works/pi-coding-agent) sessions from inside tmux.
 
 Inspired by [tmux-claude-session-manager](https://github.com/bdx0/tmux-claude-session-manager).
+
 
 ## Requirements
 
