@@ -62,6 +62,18 @@ agents cluttering the list.
 from `~/Projects/backend`, pressing `prefix + u` inside `~/Projects/frontend`
 will show only the frontend session.
 
+## Git worktrees & collision detection
+
+When a PI session is inside a git repository, the picker shows the current
+branch next to the path (e.g. `~/proj [feat-branch]`). If `HEAD` is detached,
+a short sha is shown instead.
+
+If two or more agents share the same git worktree (same top-level directory),
+their rows are marked with a `⚠️` collision badge and the picker header shows
+the total number of colliding agents. This makes it easy to spot when multiple
+agents are operating in the same workspace so you can avoid stepping on each
+other's changes.
+
 ## Options
 
 | Option | Default | Description |

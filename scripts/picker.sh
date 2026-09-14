@@ -70,7 +70,13 @@ header="PI agents · enter: jump · ctrl-x: kill"
 # ctrl-x kills the PI process itself: a dedicated session dies with its last
 # window, while a loose pane keeps the shell that hosted it. The reload waits a
 # beat so the process tree has settled.
-sel=$("${list_cmd[@]}" | fzf --ansi --delimiter='\t' --with-nth=6,7,8,9 \
+list_out=$("${list_cmd[@]}" 2>/dev/null)
+collision_count=$(printf '%s\n' "$list_out" | awk -F '\t' '$10 != "" {c[$10]++} END {n=0; for (w in c) if (c[w]>1) n+=c[w]; print n}')
+if [ "$collision_count" -gt 0 ]; then
+  header="${header}   ⚠️ ${collision_count} collision(s)"
+fi
+
+sel=$(if [ -n "$list_out" ]; then printf '%s\n' "$list_out"; else :; fi | fzf --ansi --delimiter='\t' --with-nth=6,7,8,9 \
   --reverse --cycle --header="$header" \
   --preview='tmux capture-pane -ept {2}' --preview-window='right,50%,follow' \
   --bind="ctrl-x:execute-silent(kill {3})+reload(sleep 0.3; $reload_list)" \

@@ -62,6 +62,9 @@ pi_state_from_pane_pid() {
   return 1
 }
 
+tmpfile=$(mktemp)
+trap 'rm -f "$tmpfile"' EXIT
+
 for signal in "$signal_dir"/*.signal; do
   [ -f "$signal" ] || continue
 
@@ -209,6 +212,39 @@ for signal in "$signal_dir"/*.signal; do
     path="$cwd"
   fi
 
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%5s\t%s\t%s\n' \
-    "$rank" "$pane_id" "$pid" "$kind" "$workspace" "$icon" "$age" "$loc" "$path"
-done | sort -t$'\t' -k1,1n -k6,6n
+  # Git worktree / branch info
+  branch=""
+  worktree_path=""
+  if command -v git >/dev/null 2>&1; then
+    branch=$(cd "$cwd" 2>/dev/null && git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+    if [ "$branch" = "HEAD" ]; then
+      branch=$(cd "$cwd" 2>/dev/null && git rev-parse --short HEAD 2>/dev/null || true)
+      [ -n "$branch" ] && branch="${branch} (detached)"
+    fi
+    worktree_path=$(cd "$cwd" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null || true)
+  fi
+  [ -n "$branch" ] && path="$path [${branch}]"
+
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%5s\t%s\t%s\t%s\n' \
+    "$rank" "$pane_id" "$pid" "$kind" "$workspace" "$icon" "$age" "$loc" "$path" "$worktree_path" >> "$tmpfile"
+done
+
+# Detect collisions: more than one agent in the same git worktree
+awk -F '\t' '{
+  count[$10]++
+  for (j = 1; j <= NF; j++) {
+    field[NR, j] = $j
+  }
+}
+END {
+  for (i = 1; i <= NR; i++) {
+    if (field[i, 10] != "" && count[field[i, 10]] > 1) {
+      field[i, 6] = "⚠️  " field[i, 6]
+    }
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%5s\t%s\t%s\t%s\n",
+      field[i, 1], field[i, 2], field[i, 3], field[i, 4], field[i, 5],
+      field[i, 6], field[i, 7], field[i, 8], field[i, 9], field[i, 10]
+  }
+}' "$tmpfile" | sort -t$'\t' -k1,1n -k6,6n
+
+rm -f "$tmpfile"
