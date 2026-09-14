@@ -31,3 +31,33 @@ if [ "$(get_tmux_option @pi_forward_bell 'on')" = 'on' ]; then
   tmux set-hook -g alert-bell \
     "run-shell -b \"$CURRENT_DIR/scripts/bell.sh '#{q:hook_session_name}'\""
 fi
+
+# Status-bar indicator: shows counts of sessions waiting for input or idle.
+if [ "$(get_tmux_option @pi_status_indicator 'on')" = 'on' ]; then
+  current_status_right="$(tmux show-options -gqv status-right)"
+  saved_original="$(tmux show-options -gqv @pi_status_right_original 2>/dev/null)"
+
+  # Save the pristine value once so reloads don't nest the indicator.
+  if [ -z "$saved_original" ]; then
+    tmux set-option -g @pi_status_right_original "$current_status_right"
+    saved_original="$current_status_right"
+  fi
+
+  # Inject the indicator command only if it is not already present.
+  case "$current_status_right" in
+    *"$CURRENT_DIR/scripts/status.sh"*) ;;
+    *)
+      if [ -n "$saved_original" ]; then
+        tmux set-option -g status-right "#($CURRENT_DIR/scripts/status.sh) $saved_original"
+      else
+        tmux set-option -g status-right "#($CURRENT_DIR/scripts/status.sh)"
+      fi
+      ;;
+  esac
+
+  # Refresh often enough to be useful, without overriding a faster user setting.
+  current_interval="$(tmux show-options -gqv status-interval)"
+  if [ -z "$current_interval" ] || [ "$current_interval" -gt 5 ] 2>/dev/null; then
+    tmux set-option -g status-interval 5
+  fi
+fi

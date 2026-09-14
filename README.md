@@ -1,6 +1,6 @@
 # tmux-pi-session-manager
 
-Launch, list, and jump across PI coding-agent sessions from inside tmux.
+Launch, list, monitor, and jump across [PI coding-agent](https://github.com/earendil-works/pi-coding-agent) sessions from inside tmux.
 
 Inspired by [tmux-claude-session-manager](https://github.com/bdx0/tmux-claude-session-manager).
 
@@ -42,13 +42,16 @@ run-shell ~/.tmux/plugins/tmux-pi-session-manager/tmux-pi-session-manager.tmux
 
 | Key | Action |
 |-----|--------|
-| `prefix + y` | Launch (or re-attach to) a PI session for the current pane's directory |
+| `prefix + y` | Launch a new PI session for the current pane's directory |
 | `prefix + u` | Open the session picker (`fzf`) for the current workspace |
 
-Inside the picker:
-- `Enter` — jump to the selected agent
-- `Ctrl-x` — kill the selected agent
-- `Ctrl-c` — close the picker
+### Picker controls
+
+| Key | Action |
+|-----|--------|
+| `Enter` | Jump to the selected agent |
+| `Ctrl-x` | Kill the selected agent |
+| `Ctrl-c` | Close the picker |
 
 ## Workspaces
 
@@ -62,6 +65,21 @@ agents cluttering the list.
 from `~/Projects/backend`, pressing `prefix + u` inside `~/Projects/frontend`
 will show only the frontend session.
 
+The current workspace is displayed as a word-wrapped footer at the bottom of
+the picker.
+
+## Picker columns
+
+Each row in the picker shows:
+
+| Column | Description |
+|--------|-------------|
+| ● status | **Red** = actively working (process running), **Yellow** = waiting for input, **Green** = idle (process finished) |
+| `+N` | Sub-agent count (small gray badge when the PI agent has spawned child agents) |
+| Age | Minutes since the session was launched |
+| Location | tmux `session:window.pane` where the agent lives |
+| Path | Working directory (with `~` shorthand for home) plus git branch info |
+
 ## Git worktrees & collision detection
 
 When a PI session is inside a git repository, the picker shows the current
@@ -73,6 +91,37 @@ their rows are marked with a `⚠️` collision badge and the picker header show
 the total number of colliding agents. This makes it easy to spot when multiple
 agents are operating in the same workspace so you can avoid stepping on each
 other's changes.
+
+## Status-bar indicator
+
+The plugin can display a live-updating indicator in your tmux `status-right`
+showing how many PI sessions need attention:
+
+- **⏸** (yellow) — sessions where the `pi` process is sleeping / blocked
+  (likely waiting for user input)
+- **✔** (green) — sessions where `pi` has finished running (idle)
+
+Sessions where `pi` is actively working are omitted from the indicator since
+they don't need attention. Tmux refreshes the indicator every `status-interval`
+(defaults to 5 seconds when enabled).
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `@pi_status_indicator` | `on` | Master switch for the status-right indicator |
+| `@pi_status_waiting_color` | `yellow` | tmux colour for the waiting count |
+| `@pi_status_idle_color` | `green` | tmux colour for the idle count |
+| `@pi_status_waiting_format` | `#[fg={color}]⏸ {count}#[default]` | Format string for waiting count (`{color}`, `{count}` substituted) |
+| `@pi_status_idle_format` | `#[fg={color}]✔ {count}#[default]` | Format string for idle count |
+| `@pi_status_separator` | ` \| ` | Separator between waiting and idle segments |
+
+## Bell forwarding
+
+Bells (e.g. from `\a` in terminal output) rung inside a dedicated PI session
+are forwarded to the original tmux window that launched it. This works with
+tmux's built-in bell styling (`window-status-bell-style`) and terminal
+passthrough, so you never miss when an agent completes a long task.
+
+Disabled by setting `@pi_forward_bell off`.
 
 ## Options
 
@@ -88,6 +137,12 @@ other's changes.
 | `@pi_list_key` | `u` | Key binding to open the picker |
 | `@pi_forward_bell` | `on` | Forward bell events from PI sessions to their origin windows |
 | `@pi_fzf_options` | `''` | Extra fzf options |
+| `@pi_status_indicator` | `on` | Show PI session status in tmux status-right |
+| `@pi_status_waiting_color` | `yellow` | Colour for waiting count in status-right |
+| `@pi_status_idle_color` | `green` | Colour for idle count in status-right |
+| `@pi_status_waiting_format` | `#[fg={color}]⏸ {count}#[default]` | Format string for waiting sessions |
+| `@pi_status_idle_format` | `#[fg={color}]✔ {count}#[default]` | Format string for idle sessions |
+| `@pi_status_separator` | ` \| ` | Separator between status segments |
 
 Example in `~/.tmux.conf`:
 
@@ -96,4 +151,5 @@ set -g @pi_command 'pi'
 set -g @pi_args '--model gpt-4o'
 set -g @pi_popup_width '80%'
 set -g @pi_popup_height '80%'
+set -g @pi_status_indicator 'on'
 ```
