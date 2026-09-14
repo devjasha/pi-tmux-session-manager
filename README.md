@@ -18,7 +18,7 @@ Inspired by [tmux-claude-session-manager](https://github.com/bdx0/tmux-claude-se
 Add to your `~/.tmux.conf`:
 
 ```tmux
-set -g @plugin 'yourusername/tmux-pi-session-manager'
+set -g @plugin 'devjasha/tmux-pi-session-manager'
 ```
 
 Then press `prefix + I` to install.
@@ -28,7 +28,7 @@ Then press `prefix + I` to install.
 Clone into your tmux plugins directory:
 
 ```bash
-git clone https://github.com/yourusername/tmux-pi-session-manager \
+git clone https://github.com/devjasha/tmux-pi-session-manager \
   ~/.tmux/plugins/tmux-pi-session-manager
 ```
 
