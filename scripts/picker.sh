@@ -39,7 +39,7 @@ extra_opts=()
 fzf_options="$(get_tmux_option @pi_fzf_options '')"
 [ -n "$fzf_options" ] && eval "extra_opts=($fzf_options)"
 
-pane_key="$(get_tmux_option @pi_picker_pane_key 'ctrl-o')"
+pane_key="$(get_tmux_option @pi_picker_pane_key 'alt-o')"
 
 reload_list="$self --list"
 [ -n "$workspace" ] && reload_list="$reload_list --workspace '$workspace'"
