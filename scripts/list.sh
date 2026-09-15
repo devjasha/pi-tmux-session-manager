@@ -50,9 +50,9 @@ case "$my_session" in
   # teardown, then reopen — retrying a reopen that is rejected mid-teardown (it
   # returns almost instantly, whereas a popup that opened blocks while in use).
   tmux detach-client -s "$my_session"
-  for _ in $(seq 1 100); do
+  for delay in 0.02 0.04 0.08 0.16 0.32 0.5 0.5 0.5; do
     tmux list-clients -F '#{session_name}' 2>/dev/null | grep -qx "$my_session" || break
-    sleep 0.05
+    sleep "$delay"
   done
   host="$(tmux show-options -gqv @pi_parent 2>/dev/null)"
   # A stale parent would make every retry fail; fall back to the default client.
@@ -60,14 +60,14 @@ case "$my_session" in
     host=''
   fi
 
-  sleep 0.1
+  sleep 0.05
   rc=0
-  for _ in $(seq 1 40); do
+  for delay in 0.05 0.1 0.2 0.4 0.5 0.5; do
     before=$SECONDS
     open_picker "$host"
     rc=$?
     { [ "$rc" -eq 0 ] || [ $((SECONDS - before)) -ge 1 ]; } && break
-    sleep 0.1
+    sleep "$delay"
   done
   exit "$rc"
   ;;
