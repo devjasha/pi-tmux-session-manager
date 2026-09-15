@@ -100,7 +100,6 @@ for signal in "$signal_dir"/*.signal; do
   fi
 
   if ! tmux has-session -t "$session" 2>/dev/null; then
-    rm -f "$signal" 2>/dev/null
     continue
   fi
 

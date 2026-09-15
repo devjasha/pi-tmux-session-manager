@@ -37,6 +37,10 @@ if [ "$(get_tmux_option @pi_forward_bell 'on')" = 'on' ]; then
     "run-shell -b \"$CURRENT_DIR/scripts/bell.sh '#{q:hook_session_name}'\""
 fi
 
+# Clean up signal files when a managed session actually closes.
+tmux set-hook -g session-closed \
+  "run-shell -b \"$CURRENT_DIR/scripts/cleanup-session.sh '#{q:hook_session_name}'\""
+
 # Status-bar indicator: shows counts of sessions waiting for input or idle.
 if [ "$(get_tmux_option @pi_status_indicator 'on')" = 'on' ]; then
   current_status_right="$(tmux show-options -gqv status-right)"

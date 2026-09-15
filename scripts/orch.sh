@@ -212,7 +212,6 @@ set_queue_length() {
   [ -z "$session" ] && return 1
 
   if ! tmux has-session -t "$session" 2>/dev/null; then
-    rm -f "$file"
     return 1
   fi
 

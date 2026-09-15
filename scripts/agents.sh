@@ -159,7 +159,6 @@ for signal in "$signal_dir"/*.signal; do
 
   # Skip if the tmux session is gone (stale signal file)
   if ! tmux has-session -t "$session" 2>/dev/null; then
-    rm -f "$signal"
     continue
   fi
 
