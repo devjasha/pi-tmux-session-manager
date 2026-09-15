@@ -53,6 +53,7 @@ run-shell ~/.tmux/plugins/tmux-pi-session-manager/tmux-pi-session-manager.tmux
 | Key | Action |
 |-----|--------|
 | `Enter` | Jump to the selected agent |
+| `Alt-o` | Open the selected agent in a new window pane |
 | `Ctrl-c` | Close the picker |
 
 ## Workspaces
@@ -117,6 +118,7 @@ Disabled by setting `@pi_forward_bell off`.
 | `@pi_list_key` | `u` | Key binding to open the picker |
 | `@pi_forward_bell` | `on` | Forward bell events from PI sessions to their origin windows |
 | `@pi_fzf_options` | `''` | Extra fzf options |
+| `@pi_picker_pane_key` | `alt-o` | Picker key to open the selected agent in a new window pane |
 
 Example in `~/.tmux.conf`:
 

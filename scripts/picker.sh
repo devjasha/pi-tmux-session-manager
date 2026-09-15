@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Interactive picker for running PI agents.
 #
-#   picker.sh           fzf picker; on enter, jumps to the chosen agent.
+#   picker.sh           fzf picker; on enter jumps to the chosen agent in a
+#                       popup, or press the pane key to open it in a new pane.
 #   picker.sh --list    print the rows and refresh the cache (used by fzf's
 #                       async initial load).
 set -uo pipefail
@@ -38,6 +39,8 @@ extra_opts=()
 fzf_options="$(get_tmux_option @pi_fzf_options '')"
 [ -n "$fzf_options" ] && eval "extra_opts=($fzf_options)"
 
+pane_key="$(get_tmux_option @pi_picker_pane_key 'alt-o')"
+
 reload_list="$self --list"
 [ -n "$workspace" ] && reload_list="$reload_list --workspace '$workspace'"
 
@@ -57,7 +60,9 @@ home="$HOME"
 if [ -n "$workspace_display" ] && [ "${workspace_display#"$home"}" != "$workspace_display" ]; then
   workspace_display="~${workspace_display#"$HOME"}"
 fi
-header="PI agents · enter: jump · ctrl-c: close"
+header="PI agents · enter: jump"
+[ -n "$pane_key" ] && header="${header} · ${pane_key}: open in pane"
+header="${header} · ctrl-c: close"
 
 list_out=$("${list_cmd[@]}" 2>/dev/null)
 collision_count=$(printf '%s\n' "$list_out" | awk -F '\t' '$10 != "" {c[$10]++} END {n=0; for (w in c) if (c[w]>1) n+=c[w]; print n}')
@@ -83,11 +88,40 @@ fzf_base_opts=(
 )
 [ -n "$footer" ] && fzf_base_opts+=(--footer="$footer")
 
+expect_opts=()
+[ -n "$pane_key" ] && expect_opts=("--expect=$pane_key")
+
 sel=$(if [ -n "$list_out" ]; then printf '%s\n' "$list_out"; else :; fi | fzf "${fzf_base_opts[@]}" \
+  ${expect_opts[@]+"${expect_opts[@]}"} \
   ${sync_opts[@]+"${sync_opts[@]}"} \
   ${extra_opts[@]+"${extra_opts[@]}"})
 
 [ -z "$sel" ] && exit 0
+key=$(printf '%s\n' "$sel" | head -n1)
+
+if [ "$key" = "$pane_key" ]; then
+  pane_sel=$(printf '%s\n' "$sel" | tail -n +2)
+  [ -z "$pane_sel" ] && exit 0
+  pane=$(printf '%s' "$pane_sel" | cut -f2)
+  session=$(tmux display-message -p -t "$pane" '#{session_name}' 2>/dev/null)
+  parent=$(tmux show-options -gqv @pi_parent 2>/dev/null)
+
+  # Open the selected session in a new window pane on the parent client.
+  if [ -n "$parent" ]; then
+    parent_session=$(tmux list-clients -F '#{client_name} #{session_name}' 2>/dev/null |
+      awk -v p="$parent" '$1 == p { print $2; exit }')
+    if [ -n "$parent_session" ]; then
+      new_window=$(tmux new-window -t "$parent_session" -P -F '#{window_id}' "tmux attach-session -t '$session'")
+      tmux select-window -c "$parent" -t "$new_window" 2>/dev/null
+      exit 0
+    fi
+  fi
+
+  # Fallback if no parent client is recorded.
+  tmux new-window "tmux attach-session -t '$session'"
+  exit 0
+fi
+
 pane=$(printf '%s' "$sel" | cut -f2)
 
 parent=$(tmux show-options -gqv @pi_parent 2>/dev/null)
