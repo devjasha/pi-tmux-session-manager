@@ -4,7 +4,7 @@
 # Usage: orch.sh <command> [args...]
 #
 # Commands:
-#   health                        Update status in all signal files.
+#   health [--force]              Update stale status in all signal files.
 #   pause <session>               SIGSTOP the pi process.
 #   resume <session>              SIGCONT the pi process.
 #   toggle <session>              Toggle pause / resume.
@@ -19,7 +19,6 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=helpers.sh
 . "$DIR/helpers.sh"
 
-prefix="$(get_tmux_option @pi_session_prefix 'pi-')"
 signal_dir="$(get_tmux_option @pi_signal_dir "$HOME/.tmux-pi-session-manager/signals")"
 queue_dir="$HOME/.tmux-pi-session-manager/queue"
 mkdir -p "$signal_dir" "$queue_dir"
@@ -79,61 +78,6 @@ except Exception as e: sys.exit(1)
 }
 
 # ---------------------------------------------------------------------------
-# Process discovery (same logic as agents.sh)
-# ---------------------------------------------------------------------------
-
-# Find the pi PID inside a pane. Returns the PID or empty.
-find_pi_pid() {
-  local pane_pid="$1"
-  local pid comm
-
-  # Direct
-  comm="$(ps -o comm= -p "$pane_pid" 2>/dev/null | tr -d ' ')"
-  if [ "$comm" = "pi" ]; then
-    printf '%s' "$pane_pid"
-    return 0
-  fi
-
-  # Depth 1
-  for pid in $(pgrep -P "$pane_pid" 2>/dev/null); do
-    comm="$(ps -o comm= -p "$pid" 2>/dev/null | tr -d ' ')"
-    if [ "$comm" = "pi" ]; then
-      printf '%s' "$pid"
-      return 0
-    fi
-  done
-
-  # Depth 2
-  for pid in $(pgrep -P "$pane_pid" 2>/dev/null); do
-    for child in $(pgrep -P "$pid" 2>/dev/null); do
-      comm="$(ps -o comm= -p "$child" 2>/dev/null | tr -d ' ')"
-      if [ "$comm" = "pi" ]; then
-        printf '%s' "$child"
-        return 0
-      fi
-    done
-  done
-
-  return 1
-}
-
-# Return status string for a pi PID: working, waiting, idle
-pi_status() {
-  local pid="$1"
-  [ -z "$pid" ] && { printf 'idle'; return 0; }
-  if ! kill -0 "$pid" 2>/dev/null; then
-    printf 'idle'
-    return 0
-  fi
-  local state
-  state="$(ps -o state= -p "$pid" 2>/dev/null | tr -d ' ')"
-  case "$state" in
-    R*) printf 'working' ;;
-    *)  printf 'waiting' ;;
-  esac
-}
-
-# ---------------------------------------------------------------------------
 # Signal-file helpers
 # ---------------------------------------------------------------------------
 
@@ -188,8 +132,8 @@ set_task() {
 set_pid_status() {
   local file="$1" pid="$2" status="$3" ts="$4"
   update_json "$file" \
-    ".pid = $pid | .status = \"$status\" | .status_at = $ts" \
-    "d['pid']=$pid; d['status']='$status'; d['status_at']=$ts"
+    ".orch //= {\"desired_state\":\"active\",\"paused_at\":null,\"task\":\"\",\"queue_length\":0} | .pid = $pid | .status = \"$status\" | .status_at = $ts" \
+    "d.setdefault('orch', {'desired_state':'active','paused_at':None,'task':'','queue_length':0}); d['pid']=$pid; d['status']='$status'; d['status_at']=$ts"
 }
 
 set_queue_length() {
@@ -203,47 +147,64 @@ set_queue_length() {
 # Per-session actions
 # ---------------------------------------------------------------------------
 
-健康检查() {
-  local file="$1"
-  local session pane_id pane_pid pi_pid status ts
-
-  session="$(read_session "$file")"
-  pane_id="$(read_pane_id "$file")"
-  [ -z "$session" ] && return 1
-
-  if ! tmux has-session -t "$session" 2>/dev/null; then
-    return 1
-  fi
-
-  pane_pid="$(tmux list-panes -t "$session" -F '#{pane_pid} #{pane_id}' 2>/dev/null |
-             awk -v pid="$pane_id" '$2 == pid { print $1; exit }')"
-  [ -z "$pane_pid" ] && return 1
-
-  pi_pid="$(find_pi_pid "$pane_pid")"
-  status="$(pi_status "${pi_pid:-}")"
-  ts="$(date +%s)"
-
-  ensure_orch_field "$file"
-  set_pid_status "$file" "${pi_pid:-null}" "$status" "$ts"
-
-  # Reconcile desired_state with reality
-  local desired
-  desired="$(read_orch_state "$file")"
-  if [ "$desired" = "paused" ] && [ -n "$pi_pid" ] && [ "$status" != "idle" ]; then
-    kill -STOP "$pi_pid" 2>/dev/null
-  elif [ "$desired" = "active" ] && [ -n "$pi_pid" ] && [ "$status" != "idle" ]; then
-    kill -CONT "$pi_pid" 2>/dev/null
-  fi
-
-  printf '%s\t%s\n' "$session" "$status"
-}
-
 cmd_health() {
-  local file
-  for file in "$signal_dir"/*.signal; do
-    [ -f "$file" ] || continue
-    健康检查 "$file"
-  done
+  local force="${1:-}" lock_dir="$signal_dir/.health.lock" lock_pid=""
+  local file session pane_id cached_status cached_status_at desired pane_key pane_pid status pi_pid now processes_loaded=""
+  local files
+  files=("$signal_dir"/*.signal)
+  [ -f "${files[0]}" ] || return 0
+
+  if ! mkdir "$lock_dir" 2>/dev/null; then
+    [ -f "$lock_dir/pid" ] && read -r lock_pid < "$lock_dir/pid"
+    if [ -n "$lock_pid" ] && ! kill -0 "$lock_pid" 2>/dev/null; then
+      rm -rf "$lock_dir"
+      mkdir "$lock_dir" 2>/dev/null || return 0
+    else
+      return 0
+    fi
+  fi
+  printf '%s\n' "$$" > "$lock_dir/pid"
+  health_lock_dir="$lock_dir"
+  trap 'rm -rf "$health_lock_dir"' EXIT
+
+  load_tmux_panes
+  now=$(date +%s)
+  while IFS=$'\x1f' read -r file session pane_id _cwd _workspace _origin _created_at _cached_pid cached_status cached_status_at desired _task; do
+    [ -n "$session" ] || continue
+    pane_key="${pane_id#%}"
+    if [ "${PANE_SESSION[$pane_key]:-}" != "$session" ]; then
+      # Stale signal; skip but do not delete here. Cleanup is handled by the
+      # session-closed hook via cleanup-session.sh.
+      continue
+    fi
+    if [ "$force" != "--force" ] && [ -n "$cached_status" ] && \
+       [ "$((now - cached_status_at))" -lt 60 ] 2>/dev/null; then
+      printf '%s\t%s\n' "$session" "$cached_status"
+      continue
+    fi
+
+    if [ -z "$processes_loaded" ]; then
+      load_process_snapshot
+      processes_loaded=1
+    fi
+    pane_pid="${PANE_PID[$pane_key]}"
+    inspect_pane_processes "$pane_pid" || true
+    pi_pid="$PI_PID"
+    if [ -z "$pi_pid" ]; then
+      status="idle"
+    elif [[ "$PI_STATE" = R* ]]; then
+      status="working"
+    else
+      status="waiting"
+    fi
+    set_pid_status "$file" "${pi_pid:-null}" "$status" "$now"
+    if [ "$desired" = "paused" ] && [ -n "$pi_pid" ]; then
+      kill -STOP "$pi_pid" 2>/dev/null
+    elif [ "$desired" = "active" ] && [ -n "$pi_pid" ]; then
+      kill -CONT "$pi_pid" 2>/dev/null
+    fi
+    printf '%s\t%s\n' "$session" "$status"
+  done < <(read_signal_records "${files[@]}")
 }
 
 cmd_pause() {
@@ -405,7 +366,7 @@ cmd="${1:-}"
 shift 2>/dev/null || true
 
 case "$cmd" in
-  health)    cmd_health ;;
+  health)    cmd_health "$@" ;;
   pause)     cmd_pause "$1" ;;
   resume)    cmd_resume "$1" ;;
   toggle)    cmd_toggle "$1" ;;
@@ -420,7 +381,7 @@ case "$cmd" in
 Usage: orch.sh <command> [args...]
 
 Commands:
-  health                        Update status in all signal files.
+  health [--force]              Update stale status in all signal files.
   pause <session>               SIGSTOP the pi process.
   resume <session>              SIGCONT the pi process.
   toggle <session>              Toggle pause / resume.

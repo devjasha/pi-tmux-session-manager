@@ -23,109 +23,43 @@ session_format="$(get_tmux_option @pi_status_session_format '#[fg={color}]▶ {c
 
 current_session="${1:-}"
 
-# Determine whether a pane's pi process is in the requested state.
-# Returns 0 if the pane matches, 1 otherwise.
-#   waiting  → pi exists and is NOT in R (running) state
-#   idle     → no pi process found in the pane tree
-pane_is_state() {
-  local pane_pid="$1" want="$2"
-  local comm pid state child
-
-  # Direct: pane PID is pi itself
-  comm=$(ps -o comm= -p "$pane_pid" 2>/dev/null | tr -d ' ')
-  if [ "$comm" = "pi" ]; then
-    if [ "$want" = "idle" ]; then
-      return 1
-    fi
-    state=$(ps -o state= -p "$pane_pid" 2>/dev/null | tr -d ' ')
-    [ "$state" != "R" ] && return 0 || return 1
-  fi
-
-  # Depth 1: direct children of the shell
-  for pid in $(pgrep -P "$pane_pid" 2>/dev/null); do
-    comm=$(ps -o comm= -p "$pid" 2>/dev/null | tr -d ' ')
-    if [ "$comm" = "pi" ]; then
-      if [ "$want" = "idle" ]; then
-        return 1
-      fi
-      state=$(ps -o state= -p "$pid" 2>/dev/null | tr -d ' ')
-      [ "$state" != "R" ] && return 0 || return 1
-    fi
-  done
-
-  # Depth 2: wrapper → pi
-  for pid in $(pgrep -P "$pane_pid" 2>/dev/null); do
-    for child in $(pgrep -P "$pid" 2>/dev/null); do
-      comm=$(ps -o comm= -p "$child" 2>/dev/null | tr -d ' ')
-      if [ "$comm" = "pi" ]; then
-        if [ "$want" = "idle" ]; then
-          return 1
-        fi
-        state=$(ps -o state= -p "$child" 2>/dev/null | tr -d ' ')
-        [ "$state" != "R" ] && return 0 || return 1
-      fi
-    done
-  done
-
-  # No pi process found anywhere
-  if [ "$want" = "idle" ]; then
-    return 0
-  fi
-  return 1
-}
-
 waiting=0
 idle=0
 running=0
 now=$(date +%s)
+files=("$signal_dir"/*.signal)
+[ -f "${files[0]}" ] || exit 0
+load_tmux_panes
+processes_loaded=""
 
-for signal in "$signal_dir"/*.signal; do
-  [ -f "$signal" ] || continue
-
-  if command -v jq >/dev/null 2>&1; then
-    session=$(jq -r '.session // empty' "$signal" 2>/dev/null)
-    pane_id=$(jq -r '.pane_id // empty' "$signal" 2>/dev/null)
-    cached_status=$(jq -r '.status // empty' "$signal" 2>/dev/null)
-    cached_status_at=$(jq -r '.status_at // 0' "$signal" 2>/dev/null)
-    orch_state=$(jq -r '.orch.desired_state // "active"' "$signal" 2>/dev/null)
-  else
-    session=$(sed -n 's/.*"session": "\([^"]*\)".*/\1/p' "$signal")
-    pane_id=$(sed -n 's/.*"pane_id": "\([^"]*\)".*/\1/p' "$signal")
-    cached_status=""
-    cached_status_at=0
-    orch_state="active"
-  fi
-
+while IFS=$'\x1f' read -r signal session pane_id _cwd _workspace _origin _created_at _pid cached_status cached_status_at orch_state _task; do
   [ -z "$session" ] && continue
   [ -z "$pane_id" ] && continue
-
-  # Skip paused sessions; they do not need attention.
-  if [ "$orch_state" = "paused" ]; then
+  [ "$orch_state" = "paused" ] && continue
+  pane_key="${pane_id#%}"
+  if [ "${PANE_SESSION[$pane_key]:-}" != "$session" ]; then
+    # Stale signal; skip for display but do not delete here. Cleanup happens
+    # at the real session-closed boundary via cleanup-session.sh.
     continue
   fi
 
-  if ! tmux has-session -t "$session" 2>/dev/null; then
-    continue
-  fi
-
-  # Prefer cached status when fresh (< 60 s).
   status=""
-  if [ -n "$cached_status" ] && [ -n "$cached_status_at" ] && \
+  if [ -n "$cached_status" ] && \
      [ "$((now - cached_status_at))" -lt 60 ] 2>/dev/null; then
     status="$cached_status"
   fi
 
   if [ -z "$status" ]; then
-    pane_pid=$(tmux list-panes -t "$session" -F '#{pane_pid} #{pane_id}' 2>/dev/null |
-               awk -v pid="$pane_id" '$2 == pid { print $1; exit }')
-    [ -z "$pane_pid" ] && continue
-
-    if pane_is_state "$pane_pid" "waiting"; then
-      status="waiting"
-    elif pane_is_state "$pane_pid" "idle"; then
+    if [ -z "$processes_loaded" ]; then
+      load_process_snapshot
+      processes_loaded=1
+    fi
+    if ! inspect_pane_processes "${PANE_PID[$pane_key]}"; then
       status="idle"
-    else
+    elif [[ "$PI_STATE" = R* ]]; then
       status="working"
+    else
+      status="waiting"
     fi
   fi
 
@@ -137,7 +71,7 @@ for signal in "$signal_dir"/*.signal; do
   if [ -n "$current_session" ] && [ "$session" = "$current_session" ] && [ "$status" != "idle" ]; then
     running=$((running + 1))
   fi
-done
+done < <(read_signal_records "${files[@]}")
 
 out=""
 if [ "$running" -gt 0 ]; then
