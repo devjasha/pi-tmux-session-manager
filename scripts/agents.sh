@@ -1,24 +1,14 @@
 #!/usr/bin/env bash
 # Emit one picker row per PI session based on signal files.
 #
-# Status is read from the signal file cache when fresh (< 60 s old);
-# otherwise it falls back to live process inspection.
-#   working  pi is actively running (R state)
-#   waiting  pi is sleeping/blocked (S/D state) — likely waiting for input
-#   idle     pi is no longer running in the pane
-#
 # Output format (tab-separated):
 # rank \t pane_id \t pid \t kind \t workspace \t icon \t age \t loc \t path
-#
-# rank/pane_id/pid/kind/workspace are hidden from the display via fzf's --with-nth.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=helpers.sh
 . "$DIR/helpers.sh"
 
-signal_dir="$(get_tmux_option @pi_signal_dir $HOME/.tmux-pi-session-manager/signals)"
-
-# Optional workspace filter
+signal_dir="$(get_tmux_option @pi_signal_dir "$HOME/.tmux-pi-session-manager/signals")"
 workspace_filter=""
 if [ "${1:-}" = "--workspace" ] && [ -n "${2:-}" ]; then
   workspace_filter="$(normalize_path "$2" 2>/dev/null || printf '%s' "$2")"
@@ -26,276 +16,148 @@ if [ "${1:-}" = "--workspace" ] && [ -n "${2:-}" ]; then
 fi
 
 [ -d "$signal_dir" ] || exit 0
+files=("$signal_dir"/*.signal)
+[ -f "${files[0]}" ] || exit 0
 
-# Find the pi process in a pane and return its state letter (R, S, etc.)
-# First arg is the pane PID from tmux (shell or pi itself).
-pi_state_from_pane_pid() {
-  local pane_pid="$1"
-  local comm pid state
-
-  # Direct: pane PID is pi itself
-  comm=$(ps -o comm= -p "$pane_pid" 2>/dev/null | tr -d ' ')
-  if [ "$comm" = "pi" ]; then
-    ps -o state= -p "$pane_pid" 2>/dev/null | tr -d ' '
-    return 0
-  fi
-
-  # Depth 1: direct children of the shell
-  for pid in $(pgrep -P "$pane_pid" 2>/dev/null); do
-    comm=$(ps -o comm= -p "$pid" 2>/dev/null | tr -d ' ')
-    if [ "$comm" = "pi" ]; then
-      ps -o state= -p "$pid" 2>/dev/null | tr -d ' '
-      return 0
+git_info() {
+  local cwd="$1" i data
+  GIT_BRANCH=""
+  GIT_WORKTREE=""
+  for ((i = 0; i < ${#GIT_CWD[@]}; i++)); do
+    if [ "${GIT_CWD[$i]}" = "$cwd" ]; then
+      GIT_BRANCH="${GIT_BRANCH_CACHE[$i]}"
+      GIT_WORKTREE="${GIT_WORKTREE_CACHE[$i]}"
+      return
     fi
   done
 
-  # Depth 2: wrapper → pi
-  for pid in $(pgrep -P "$pane_pid" 2>/dev/null); do
-    for child in $(pgrep -P "$pid" 2>/dev/null); do
-      comm=$(ps -o comm= -p "$child" 2>/dev/null | tr -d ' ')
-      if [ "$comm" = "pi" ]; then
-        ps -o state= -p "$child" 2>/dev/null | tr -d ' '
-        return 0
+  if command -v git >/dev/null 2>&1; then
+    data="$(git -C "$cwd" rev-parse --show-toplevel --abbrev-ref HEAD 2>/dev/null || true)"
+    if [[ "$data" = *$'\n'* ]]; then
+      GIT_WORKTREE="${data%%$'\n'*}"
+      GIT_BRANCH="${data#*$'\n'}"
+      if [ "$GIT_BRANCH" = "HEAD" ]; then
+        GIT_BRANCH="$(git -C "$cwd" rev-parse --short HEAD 2>/dev/null || true)"
+        [ -n "$GIT_BRANCH" ] && GIT_BRANCH="$GIT_BRANCH (detached)"
       fi
-    done
-  done
-
-  return 1
-}
-
-# Resolve the actual pi PID rooted at a pane PID.
-resolve_pi_pid() {
-  local pane_pid="$1"
-  local pid
-
-  # Direct
-  if [ "$(ps -o comm= -p "$pane_pid" 2>/dev/null | tr -d ' ')" = "pi" ]; then
-    printf '%s' "$pane_pid"
-    return 0
-  fi
-
-  # Depth 1
-  for pid in $(pgrep -P "$pane_pid" 2>/dev/null); do
-    if [ "$(ps -o comm= -p "$pid" 2>/dev/null | tr -d ' ')" = "pi" ]; then
-      printf '%s' "$pid"
-      return 0
     fi
-  done
-
-  # Depth 2
-  for pid in $(pgrep -P "$pane_pid" 2>/dev/null); do
-    for child in $(pgrep -P "$pid" 2>/dev/null); do
-      if [ "$(ps -o comm= -p "$child" 2>/dev/null | tr -d ' ')" = "pi" ]; then
-        printf '%s' "$child"
-        return 0
-      fi
-    done
-  done
-
-  printf '%s' "$pane_pid"
+  fi
+  i=${#GIT_CWD[@]}
+  GIT_CWD[i]="$cwd"
+  GIT_BRANCH_CACHE[i]="$GIT_BRANCH"
+  GIT_WORKTREE_CACHE[i]="$GIT_WORKTREE"
 }
 
-# Count descendant pi processes as a proxy for active sub-agents.
-subagent_count() {
-  local parent="$1"
-  local count=0
-  local child grandchild
-  for child in $(pgrep -P "$parent" 2>/dev/null); do
-    if [ "$(ps -o comm= -p "$child" 2>/dev/null | tr -d ' ')" = "pi" ]; then
-      count=$((count + 1))
-      continue
-    fi
-    for grandchild in $(pgrep -P "$child" 2>/dev/null); do
-      if [ "$(ps -o comm= -p "$grandchild" 2>/dev/null | tr -d ' ')" = "pi" ]; then
-        count=$((count + 1))
-      fi
-    done
-  done
-  printf '%s' "$count"
-}
+load_tmux_panes
+load_process_snapshot
+now=$(date +%s)
+GIT_CWD=()
+GIT_BRANCH_CACHE=()
+GIT_WORKTREE_CACHE=()
+ROW_RANK=()
+ROW_PANE=()
+ROW_PID=()
+ROW_WORKSPACE=()
+ROW_ICON=()
+ROW_AGE=()
+ROW_LOC=()
+ROW_PATH=()
+ROW_WORKTREE=()
+ROW_SESSION=()
 
-tmpfile=$(mktemp)
-trap 'rm -f "$tmpfile"' EXIT
+while IFS=$'\x1f' read -r signal session pane_id cwd workspace _origin created_at cached_pid cached_status cached_status_at orch_state orch_task; do
+  [ -n "$session" ] || continue
+  [ -n "$pane_id" ] || continue
+  [ -n "$cwd" ] || continue
+  [ -n "$created_at" ] || continue
+  [ -n "$workspace_filter" ] && [ "$workspace" != "$workspace_filter" ] && continue
 
-for signal in "$signal_dir"/*.signal; do
-  [ -f "$signal" ] || continue
-
-  if command -v jq >/dev/null 2>&1; then
-    session=$(jq -r '.session // empty' "$signal" 2>/dev/null)
-    pane_id=$(jq -r '.pane_id // empty' "$signal" 2>/dev/null)
-    cwd=$(jq -r '.cwd // empty' "$signal" 2>/dev/null)
-    workspace=$(jq -r '.workspace // .cwd // empty' "$signal" 2>/dev/null)
-    origin=$(jq -r '.origin // empty' "$signal" 2>/dev/null)
-    created_at=$(jq -r '.created_at // empty' "$signal" 2>/dev/null)
-    cached_pid=$(jq -r '.pid // empty' "$signal" 2>/dev/null)
-    cached_status=$(jq -r '.status // empty' "$signal" 2>/dev/null)
-    cached_status_at=$(jq -r '.status_at // 0' "$signal" 2>/dev/null)
-    orch_state=$(jq -r '.orch.desired_state // "active"' "$signal" 2>/dev/null)
-    orch_task=$(jq -r '.orch.task // empty' "$signal" 2>/dev/null)
-  else
-    session=$(sed -n 's/.*"session": "\([^"]*\)".*/\1/p' "$signal")
-    pane_id=$(sed -n 's/.*"pane_id": "\([^"]*\)".*/\1/p' "$signal")
-    cwd=$(sed -n 's/.*"cwd": "\([^"]*\)".*/\1/p' "$signal")
-    workspace=$(sed -n 's/.*"workspace": "\([^"]*\)".*/\1/p' "$signal")
-    [ -n "$workspace" ] || workspace="$cwd"
-    origin=$(sed -n 's/.*"origin": "\([^"]*\)".*/\1/p' "$signal")
-    created_at=$(sed -n 's/.*"created_at": \([0-9]*\).*/\1/p' "$signal")
-    cached_pid=""
-    cached_status=""
-    cached_status_at=0
-    orch_state="active"
-    orch_task=""
-  fi
-
-  [ -z "$session" ] && continue
-  [ -z "$pane_id" ] && continue
-  [ -z "$cwd" ] && continue
-  [ -z "$created_at" ] && continue
-
-  # Skip if workspace doesn't match the filter
-  if [ -n "$workspace_filter" ] && [ "$workspace" != "$workspace_filter" ]; then
-    continue
-  fi
-
-  # Skip if the tmux session is gone (stale signal file)
-  if ! tmux has-session -t "$session" 2>/dev/null; then
+  pane_key="${pane_id#%}"
+  if [ "${PANE_SESSION[$pane_key]:-}" != "$session" ]; then
     rm -f "$signal"
     continue
   fi
+  pane_pid="${PANE_PID[$pane_key]}"
 
-  pane_pid=$(tmux list-panes -t "$session" -F '#{pane_pid} #{pane_id}' 2>/dev/null |
-             awk -v pid="$pane_id" '$2 == pid { print $1; exit }')
-  [ -z "$pane_pid" ] && continue
-
-  # Prefer cached status when fresh (< 60 s) and the cached PID still exists.
-  now=$(date +%s)
   use_cache=""
-  if [ -n "$cached_status" ] && [ -n "$cached_status_at" ] && \
-     [ "$((now - cached_status_at))" -lt 60 ] 2>/dev/null; then
-    if [ -n "$cached_pid" ] && [ "$cached_pid" != "null" ] && \
-       kill -0 "$cached_pid" 2>/dev/null; then
+  if [ -n "$cached_status" ] && [ "$((now - cached_status_at))" -lt 60 ] 2>/dev/null; then
+    if [ -n "$cached_pid" ] && [ -n "${PROCESS_COMM[$cached_pid]:-}" ]; then
       use_cache=1
-    elif [ -z "$cached_pid" ] || [ "$cached_pid" = "null" ]; then
-      # Cache says idle, so no PID expected.
+    elif [ -z "$cached_pid" ]; then
       use_cache=1
     fi
   fi
 
+  inspect_pane_processes "$pane_pid" || true
   if [ -n "$use_cache" ]; then
     status="$cached_status"
     pid="${cached_pid:-$pane_pid}"
+  elif [ -z "$PI_PID" ]; then
+    status="idle"
+    pid="$pane_pid"
   else
-    state=$(pi_state_from_pane_pid "$pane_pid")
-    if [ -n "$state" ]; then
-      case "$state" in
-        R*) status="working" ;;
-        *)  status="waiting" ;;
-      esac
+    pid="$PI_PID"
+    if [[ "$PI_STATE" = R* ]]; then
+      status="working"
     else
-      status="idle"
+      status="waiting"
     fi
-    pid="$(resolve_pi_pid "$pane_pid")"
   fi
 
-  kind="dedicated"
-
   sub_badge=""
-  if [ "$pid" != "$pane_pid" ] && [ -n "$pid" ]; then
-    sa_count=$(subagent_count "$pid")
-    if [ "${sa_count:-0}" -gt 0 ] 2>/dev/null; then
-      sub_badge=$'  \033[2;90m+'"${sa_count}"$'\033[0m'
-    fi
+  if [ "$pid" != "$pane_pid" ] && [ "$PI_SUBAGENTS" -gt 0 ]; then
+    sub_badge=$'  \033[2;90m+'"$PI_SUBAGENTS"$'\033[0m'
   fi
 
   case "$status" in
-    waiting)
-      icon=$'\033[33m●\033[0m waiting'
-      rank=0
-      ;;
-    idle)
-      icon=$'\033[32m●\033[0m idle'
-      rank=1
-      ;;
-    working)
-      icon=$'\033[31m●\033[0m working'
-      rank=3
-      ;;
-    *)
-      icon=$'\033[90m●\033[0m   ?'
-      rank=2
-      ;;
+    waiting) icon=$'\033[33m●\033[0m waiting'; rank=0 ;;
+    idle) icon=$'\033[32m●\033[0m idle'; rank=1 ;;
+    working) icon=$'\033[31m●\033[0m working'; rank=3 ;;
+    *) icon=$'\033[90m●\033[0m   ?'; rank=2 ;;
   esac
-
-  # Pause badge
   if [ "$orch_state" = "paused" ]; then
     icon=$'\033[35m⏸\033[0m '"$icon"
     rank=4
   fi
-
-  # Task annotation
-  task_badge=""
-  [ -n "$orch_task" ] && task_badge="  [${orch_task}]"
-
-  icon="${icon}${sub_badge}${task_badge}"
+  [ -n "$orch_task" ] && orch_task="  [${orch_task}]"
+  icon="${icon}${sub_badge}${orch_task}"
 
   if [ "$created_at" -gt 0 ] 2>/dev/null; then
-    age_minutes=$(((now - created_at) / 60))
-    age="${age_minutes}m"
+    age="$(((now - created_at) / 60))m"
   else
     age="-"
   fi
-
-  loc=$(tmux display-message -p -t "$pane_id" '#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null)
-  if [ -z "$loc" ]; then
-    window_index=$(tmux display-message -p -t "$pane_id" '#{window_index}' 2>/dev/null)
-    pane_index=$(tmux display-message -p -t "$pane_id" '#{pane_index}' 2>/dev/null)
-    if [ -n "$window_index" ] && [ -n "$pane_index" ]; then
-      loc="${session}:${window_index}.${pane_index}"
-    else
-      loc="${session}:unknown"
-    fi
-  fi
-
-  home="$HOME"
-  if [ "${cwd#"$home"}" != "$cwd" ]; then
+  loc="${PANE_LOCATION[$pane_key]:-${session}:unknown}"
+  if [ "${cwd#"$HOME"}" != "$cwd" ]; then
     path="~${cwd#"$HOME"}"
   else
     path="$cwd"
   fi
 
-  # Git worktree / branch info
-  branch=""
-  worktree_path=""
-  if command -v git >/dev/null 2>&1; then
-    branch=$(cd "$cwd" 2>/dev/null && git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
-    if [ "$branch" = "HEAD" ]; then
-      branch=$(cd "$cwd" 2>/dev/null && git rev-parse --short HEAD 2>/dev/null || true)
-      [ -n "$branch" ] && branch="${branch} (detached)"
-    fi
-    worktree_path=$(cd "$cwd" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null || true)
+  git_info "$cwd"
+  [ -n "$GIT_BRANCH" ] && path="$path [$GIT_BRANCH]"
+  i=${#ROW_RANK[@]}
+  ROW_RANK[i]="$rank"
+  ROW_PANE[i]="$pane_id"
+  ROW_PID[i]="$pid"
+  ROW_WORKSPACE[i]="$workspace"
+  ROW_ICON[i]="$icon"
+  ROW_AGE[i]="$age"
+  ROW_LOC[i]="$loc"
+  ROW_PATH[i]="$path"
+  ROW_WORKTREE[i]="$GIT_WORKTREE"
+  ROW_SESSION[i]="$session"
+done < <(read_signal_records "${files[@]}")
+
+for ((i = 0; i < ${#ROW_RANK[@]}; i++)); do
+  collision=""
+  if [ -n "${ROW_WORKTREE[$i]}" ]; then
+    for ((j = 0; j < ${#ROW_RANK[@]}; j++)); do
+      [ "$i" -ne "$j" ] && [ "${ROW_WORKTREE[$i]}" = "${ROW_WORKTREE[$j]}" ] && collision="⚠️  " && break
+    done
   fi
-  [ -n "$branch" ] && path="$path [${branch}]"
-
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%5s\t%s\t%s\t%s\t%s\n' \
-    "$rank" "$pane_id" "$pid" "$kind" "$workspace" "$icon" "$age" "$loc" "$path" "$worktree_path" "$session" >> "$tmpfile"
-done
-
-# Detect collisions: more than one agent in the same git worktree
-awk -F '\t' '{
-  count[$10]++
-  for (j = 1; j <= NF; j++) {
-    field[NR, j] = $j
-  }
-}
-END {
-  for (i = 1; i <= NR; i++) {
-    if (field[i, 10] != "" && count[field[i, 10]] > 1) {
-      field[i, 6] = "⚠️  " field[i, 6]
-    }
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%5s\t%s\t%s\t%s\t%s\n",
-      field[i, 1], field[i, 2], field[i, 3], field[i, 4], field[i, 5],
-      field[i, 6], field[i, 7], field[i, 8], field[i, 9], field[i, 10], field[i, 11]
-  }
-}' "$tmpfile" | sort -t$'\t' -k1,1n -k6,6n
-
-rm -f "$tmpfile"
+  printf '%s\t%s\t%s\tdedicated\t%s\t%s%s\t%5s\t%s\t%s\t%s\t%s\n' \
+    "${ROW_RANK[$i]}" "${ROW_PANE[$i]}" "${ROW_PID[$i]}" "${ROW_WORKSPACE[$i]}" \
+    "$collision" "${ROW_ICON[$i]}" "${ROW_AGE[$i]}" "${ROW_LOC[$i]}" \
+    "${ROW_PATH[$i]}" "${ROW_WORKTREE[$i]}" "${ROW_SESSION[$i]}"
+done | sort -t$'\t' -k1,1n -k6,6n
