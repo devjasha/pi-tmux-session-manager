@@ -74,7 +74,8 @@ while IFS=$'\x1f' read -r signal session pane_id cwd workspace _origin created_a
 
   pane_key="${pane_id#%}"
   if [ "${PANE_SESSION[$pane_key]:-}" != "$session" ]; then
-    rm -f "$signal"
+    # Stale signal; skip for display but do not delete here. Cleanup happens
+    # at the real session-closed boundary via cleanup-session.sh.
     continue
   fi
   pane_pid="${PANE_PID[$pane_key]}"

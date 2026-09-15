@@ -18,9 +18,14 @@ idle_color="$(get_tmux_option @pi_status_idle_color 'green')"
 waiting_format="$(get_tmux_option @pi_status_waiting_format '#[fg={color}]⏸ {count}#[default]')"
 idle_format="$(get_tmux_option @pi_status_idle_format '#[fg={color}]✔ {count}#[default]')"
 sep="$(get_tmux_option @pi_status_separator ' | ')"
+session_color="$(get_tmux_option @pi_status_session_color 'cyan')"
+session_format="$(get_tmux_option @pi_status_session_format '#[fg={color}]▶ {count}#[default]')"
+
+current_session="${1:-}"
 
 waiting=0
 idle=0
+running=0
 now=$(date +%s)
 files=("$signal_dir"/*.signal)
 [ -f "${files[0]}" ] || exit 0
@@ -33,7 +38,8 @@ while IFS=$'\x1f' read -r signal session pane_id _cwd _workspace _origin _create
   [ "$orch_state" = "paused" ] && continue
   pane_key="${pane_id#%}"
   if [ "${PANE_SESSION[$pane_key]:-}" != "$session" ]; then
-    rm -f "$signal" 2>/dev/null
+    # Stale signal; skip for display but do not delete here. Cleanup happens
+    # at the real session-closed boundary via cleanup-session.sh.
     continue
   fi
 
@@ -61,14 +67,29 @@ while IFS=$'\x1f' read -r signal session pane_id _cwd _workspace _origin _create
     waiting) waiting=$((waiting + 1)) ;;
     idle)    idle=$((idle + 1)) ;;
   esac
+
+  if [ -n "$current_session" ] && [ "$session" = "$current_session" ] && [ "$status" != "idle" ]; then
+    running=$((running + 1))
+  fi
 done < <(read_signal_records "${files[@]}")
 
 out=""
+if [ "$running" -gt 0 ]; then
+  fmt="$session_format"
+  fmt="${fmt//\{color\}/$session_color}"
+  fmt="${fmt//\{count\}/$running}"
+  out="$fmt"
+fi
+
 if [ "$waiting" -gt 0 ]; then
   fmt="$waiting_format"
   fmt="${fmt//\{color\}/$waiting_color}"
   fmt="${fmt//\{count\}/$waiting}"
-  out="$fmt"
+  if [ -n "$out" ]; then
+    out="$out$sep$fmt"
+  else
+    out="$fmt"
+  fi
 fi
 
 if [ "$idle" -gt 0 ]; then

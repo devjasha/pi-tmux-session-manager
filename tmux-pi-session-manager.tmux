@@ -11,7 +11,7 @@ CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 launch_key="$(get_tmux_option @pi_launch_key 'y')"
 list_key="$(get_tmux_option @pi_list_key 'u')"
-orch_key="$(get_tmux_option @pi_orch_key 'o')"
+orch_key="$(get_tmux_option @pi_orch_key 'O')"
 
 # Launch (or re-attach to) a PI session for the current pane's directory.
 # #{pane_current_path} / #{window_id} are expanded by run-shell before the args
@@ -37,7 +37,12 @@ if [ "$(get_tmux_option @pi_forward_bell 'on')" = 'on' ]; then
     "run-shell -b \"$CURRENT_DIR/scripts/bell.sh '#{q:hook_session_name}'\""
 fi
 
-# Status-bar indicator: shows counts of sessions waiting for input or idle.
+# Clean up signal files when a managed session actually closes.
+tmux set-hook -g session-closed \
+  "run-shell -b \"$CURRENT_DIR/scripts/cleanup-session.sh '#{q:hook_session_name}'\""
+
+# Status-bar indicator: shows counts of sessions waiting for input or idle,
+# plus a per-session count of agents currently running in this tmux session.
 if [ "$(get_tmux_option @pi_status_indicator 'on')" = 'on' ]; then
   current_status_right="$(tmux show-options -gqv status-right)"
   saved_original="$(tmux show-options -gqv @pi_status_right_original 2>/dev/null)"
@@ -48,14 +53,29 @@ if [ "$(get_tmux_option @pi_status_indicator 'on')" = 'on' ]; then
     saved_original="$current_status_right"
   fi
 
+  session_indicator="$(get_tmux_option @pi_status_session_indicator 'on')"
+  if [ "$session_indicator" = 'on' ]; then
+    status_cmd="$CURRENT_DIR/scripts/status.sh #{q:session_name}"
+  else
+    status_cmd="$CURRENT_DIR/scripts/status.sh"
+  fi
+
+  new_cmd="#($status_cmd)"
+  old_cmd="#($CURRENT_DIR/scripts/status.sh)"
+
   # Inject the indicator command only if it is not already present.
   case "$current_status_right" in
-    *"$CURRENT_DIR/scripts/status.sh"*) ;;
+    *"$new_cmd"*) ;;
+    *"$old_cmd"*)
+      # Migrate an old global-only indicator to the per-session format.
+      new_right="$(printf '%s' "$current_status_right" | sed "s|$old_cmd|$new_cmd|")"
+      tmux set-option -g status-right "$new_right"
+      ;;
     *)
       if [ -n "$saved_original" ]; then
-        tmux set-option -g status-right "#($CURRENT_DIR/scripts/status.sh) $saved_original"
+        tmux set-option -g status-right "$new_cmd $saved_original"
       else
-        tmux set-option -g status-right "#($CURRENT_DIR/scripts/status.sh)"
+        tmux set-option -g status-right "$new_cmd"
       fi
       ;;
   esac

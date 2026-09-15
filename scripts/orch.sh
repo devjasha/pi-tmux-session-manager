@@ -173,7 +173,8 @@ cmd_health() {
     [ -n "$session" ] || continue
     pane_key="${pane_id#%}"
     if [ "${PANE_SESSION[$pane_key]:-}" != "$session" ]; then
-      rm -f "$file"
+      # Stale signal; skip but do not delete here. Cleanup is handled by the
+      # session-closed hook via cleanup-session.sh.
       continue
     fi
     if [ "$force" != "--force" ] && [ -n "$cached_status" ] && \
