@@ -47,7 +47,7 @@ file_mtime() {
 
 read_signal_records() {
   if command -v jq >/dev/null 2>&1; then
-    jq -r '[input_filename, .session // "", .pane_id // "", .cwd // "", .workspace // .cwd // "", .origin // "", .created_at // "", .pid // "", .status // "", .status_at // 0, .orch.desired_state // "active", .orch.task // ""] | join("\u001f")' "$@" 2>/dev/null
+    jq -r '[input_filename, .session // "", .pane_id // "", .cwd // "", .workspace // .cwd // "", .origin // "", .created_at // "", .pid // "", .status // "", .status_at // 0] | join("\u001f")' "$@" 2>/dev/null
     return
   fi
 
@@ -67,12 +67,10 @@ for path in sys.argv[1:]:
             data = json.load(source)
     except (OSError, ValueError):
         continue
-    orch = data.get("orch") or {}
     values = [path, data.get("session"), data.get("pane_id"), data.get("cwd"),
               data.get("workspace") or data.get("cwd"), data.get("origin"),
               data.get("created_at"), data.get("pid"), data.get("status"),
-              data.get("status_at") or 0, orch.get("desired_state") or "active",
-              orch.get("task")]
+              data.get("status_at") or 0]
     print("\x1f".join(field(value) for value in values))
 PY
   fi

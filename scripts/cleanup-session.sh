@@ -16,6 +16,5 @@ signal_dir="$(get_tmux_option @pi_signal_dir "$HOME/.tmux-pi-session-manager/sig
 case "$session" in
 "$prefix"*)
   rm -f "$signal_dir/${session}.signal"
-  rm -f "$HOME/.tmux-pi-session-manager/queue/${session}"
   ;;
 esac

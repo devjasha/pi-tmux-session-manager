@@ -56,13 +56,7 @@ cat > "$signal_file" <<EOJSON
   "created_at": $ts,
   "pid": null,
   "status": "working",
-  "status_at": $ts,
-  "orch": {
-    "desired_state": "active",
-    "paused_at": null,
-    "task": "",
-    "queue_length": 0
-  }
+  "status_at": $ts
 }
 EOJSON
 

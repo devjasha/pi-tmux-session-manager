@@ -65,7 +65,7 @@ ROW_PATH=()
 ROW_WORKTREE=()
 ROW_SESSION=()
 
-while IFS=$'\x1f' read -r signal session pane_id cwd workspace _origin created_at cached_pid cached_status cached_status_at orch_state orch_task; do
+while IFS=$'\x1f' read -r signal session pane_id cwd workspace _origin created_at cached_pid cached_status cached_status_at; do
   [ -n "$session" ] || continue
   [ -n "$pane_id" ] || continue
   [ -n "$cwd" ] || continue
@@ -116,12 +116,7 @@ while IFS=$'\x1f' read -r signal session pane_id cwd workspace _origin created_a
     working) icon=$'\033[31m●\033[0m working'; rank=3 ;;
     *) icon=$'\033[90m●\033[0m   ?'; rank=2 ;;
   esac
-  if [ "$orch_state" = "paused" ]; then
-    icon=$'\033[35m⏸\033[0m '"$icon"
-    rank=4
-  fi
-  [ -n "$orch_task" ] && orch_task="  [${orch_task}]"
-  icon="${icon}${sub_badge}${orch_task}"
+  icon="${icon}${sub_badge}"
 
   if [ "$created_at" -gt 0 ] 2>/dev/null; then
     age="$(((now - created_at) / 60))m"
