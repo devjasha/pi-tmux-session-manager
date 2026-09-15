@@ -18,6 +18,10 @@ idle_color="$(get_tmux_option @pi_status_idle_color 'green')"
 waiting_format="$(get_tmux_option @pi_status_waiting_format '#[fg={color}]⏸ {count}#[default]')"
 idle_format="$(get_tmux_option @pi_status_idle_format '#[fg={color}]✔ {count}#[default]')"
 sep="$(get_tmux_option @pi_status_separator ' | ')"
+session_color="$(get_tmux_option @pi_status_session_color 'cyan')"
+session_format="$(get_tmux_option @pi_status_session_format '#[fg={color}]▶ {count}#[default]')"
+
+current_session="${1:-}"
 
 # Determine whether a pane's pi process is in the requested state.
 # Returns 0 if the pane matches, 1 otherwise.
@@ -72,6 +76,7 @@ pane_is_state() {
 
 waiting=0
 idle=0
+running=0
 now=$(date +%s)
 
 for signal in "$signal_dir"/*.signal; do
@@ -128,14 +133,29 @@ for signal in "$signal_dir"/*.signal; do
     waiting) waiting=$((waiting + 1)) ;;
     idle)    idle=$((idle + 1)) ;;
   esac
+
+  if [ -n "$current_session" ] && [ "$session" = "$current_session" ] && [ "$status" != "idle" ]; then
+    running=$((running + 1))
+  fi
 done
 
 out=""
+if [ "$running" -gt 0 ]; then
+  fmt="$session_format"
+  fmt="${fmt//\{color\}/$session_color}"
+  fmt="${fmt//\{count\}/$running}"
+  out="$fmt"
+fi
+
 if [ "$waiting" -gt 0 ]; then
   fmt="$waiting_format"
   fmt="${fmt//\{color\}/$waiting_color}"
   fmt="${fmt//\{count\}/$waiting}"
-  out="$fmt"
+  if [ -n "$out" ]; then
+    out="$out$sep$fmt"
+  else
+    out="$fmt"
+  fi
 fi
 
 if [ "$idle" -gt 0 ]; then

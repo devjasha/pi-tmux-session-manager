@@ -160,22 +160,32 @@ orch.sh cleanup
 The plugin can display a live-updating indicator in your tmux `status-right`
 showing how many PI sessions need attention:
 
+- **▶** (cyan) — agents currently running inside the tmux session you are
+  looking at (working or waiting, but not idle or paused)
 - **⏸** (yellow) — sessions where the `pi` process is sleeping / blocked
   (likely waiting for user input)
 - **✔** (green) — sessions where `pi` has finished running (idle)
 
-Sessions where `pi` is actively working are omitted from the indicator since
-they don't need attention. Tmux refreshes the indicator every `status-interval`
-(defaults to 5 seconds when enabled).
+The **▶** count is scoped to the tmux session that owns the status bar, so
+it tells you at a glance how many agents are running in the same session you
+are currently attached to. The waiting and idle counts remain global across
+all managed PI sessions.
+
+Sessions where `pi` is actively working are omitted from the waiting/idle
+segments since they don't need attention. Tmux refreshes the indicator every
+`status-interval` (defaults to 5 seconds when enabled).
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `@pi_status_indicator` | `on` | Master switch for the status-right indicator |
+| `@pi_status_session_indicator` | `on` | Show the per-session running-agent count |
+| `@pi_status_session_color` | `cyan` | tmux colour for the per-session running count |
+| `@pi_status_session_format` | `#[fg={color}]▶ {count}#[default]` | Format string for the per-session running count |
 | `@pi_status_waiting_color` | `yellow` | tmux colour for the waiting count |
 | `@pi_status_idle_color` | `green` | tmux colour for the idle count |
 | `@pi_status_waiting_format` | `#[fg={color}]⏸ {count}#[default]` | Format string for waiting count (`{color}`, `{count}` substituted) |
 | `@pi_status_idle_format` | `#[fg={color}]✔ {count}#[default]` | Format string for idle count |
-| `@pi_status_separator` | ` \| ` | Separator between waiting and idle segments |
+| `@pi_status_separator` | ` \| ` | Separator between segments |
 
 ## Bell forwarding
 
@@ -202,6 +212,9 @@ Disabled by setting `@pi_forward_bell off`.
 | `@pi_forward_bell` | `on` | Forward bell events from PI sessions to their origin windows |
 | `@pi_fzf_options` | `''` | Extra fzf options |
 | `@pi_status_indicator` | `on` | Show PI session status in tmux status-right |
+| `@pi_status_session_indicator` | `on` | Show count of agents running in the current tmux session |
+| `@pi_status_session_color` | `cyan` | Colour for the current-session running count |
+| `@pi_status_session_format` | `#[fg={color}]▶ {count}#[default]` | Format string for the current-session running count |
 | `@pi_status_waiting_color` | `yellow` | Colour for waiting count in status-right |
 | `@pi_status_idle_color` | `green` | Colour for idle count in status-right |
 | `@pi_status_waiting_format` | `#[fg={color}]⏸ {count}#[default]` | Format string for waiting sessions |

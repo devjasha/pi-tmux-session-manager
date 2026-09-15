@@ -39,31 +39,36 @@ Each signal file is a JSON object with the following fields:
 
 ## Overview
 The plugin can display a small, live-updating indicator in the tmux `status-right` area that alerts the user whenever any managed PI session is either:
+- **running in this session** — the `pi` process is alive in the same tmux session the user is currently attached to (working or waiting, but not idle or paused)
 - **waiting** — the `pi` process is in a sleep / blocked state (likely needs user input)
 - **idle** — the `pi` process is no longer running in the pane (task finished)
 
-`working` sessions are intentionally *not* shown because they do not require attention.
+`working` sessions are intentionally *not* shown in the waiting/idle segments because they do not require attention, but they *are* counted in the per-session running segment because they are still active agents in the current session.
 
 ## Mechanism
-A new helper script `scripts/status.sh` scans the signal-file directory, counts how many sessions are in each attention-requiring state, and prints a compact tmux-formatted string.  The main plugin entry-point (`tmux-pi-session-manager.tmux`) optionally prepends this script to the user's `status-right` option via tmux's `#(...)` interpolation.  Tmux re-evaluates `#(...)` every `status-interval` seconds.
+A new helper script `scripts/status.sh` scans the signal-file directory, counts how many sessions are in each relevant state, and prints a compact tmux-formatted string.  When the per-session indicator is enabled, `tmux-pi-session-manager.tmux` passes the current tmux session name (`#{q:session_name}`) to `status.sh` so it can count only signal files whose `session` field matches.  The main plugin entry-point optionally prepends this script to the user's `status-right` option via tmux's `#(...)` interpolation.  Tmux re-evaluates `#(...)` every `status-interval` seconds.
 
 ## Configuration Options
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `@pi_status_indicator` | `on` | Master switch. When `on`, the plugin injects the indicator into `status-right` and sets a sensible `status-interval`. When `off`, nothing is changed. |
+| `@pi_status_session_indicator` | `on` | Show the count of agents currently running in the current tmux session. |
+| `@pi_status_session_color` | `cyan` | tmux colour used for the per-session running count segment. |
+| `@pi_status_session_format` | `#[fg={color}]▶ {count}#[default]` | Format string for the per-session running count. `{color}` and `{count}` are substituted at runtime. |
 | `@pi_status_waiting_color` | `yellow` | tmux colour used for the waiting count segment. |
 | `@pi_status_idle_color` | `green` | tmux colour used for the idle / completed count segment. |
 | `@pi_status_waiting_format` | `#[fg={color}]⏸ {count}#[default]` | Format string for waiting sessions. `{color}` and `{count}` are substituted at runtime. |
 | `@pi_status_idle_format` | `#[fg={color}]✔ {count}#[default]` | Format string for idle sessions. Same placeholders. |
-| `@pi_status_separator` | ` \| ` | Text placed between the waiting and idle segments when both are present. |
+| `@pi_status_separator` | ` \| ` | Text placed between segments when more than one is present. |
 
 ## Behaviour Details
 - On first load the plugin stores the current `status-right` value in `@pi_status_right_original` so subsequent reloads do not nest the indicator.
-- The indicator is only injected if `status-right` does not already contain `status.sh`.
+- The indicator is injected if `status-right` does not already contain the current `status.sh` command; if it contains the older global-only command, the plugin migrates it to the per-session format.
+- When `@pi_status_session_indicator` is `on`, `tmux-pi-session-manager.tmux` invokes `status.sh` with the current tmux session name (`#{q:session_name}`). Setting `@pi_status_session_indicator` to `off` disables the per-session segment and restores the global-only indicator.
 - `status-interval` is raised to `5` (if it is currently unset or slower) so the bar updates reasonably often without overriding an already-fast user setting.
 - `status.sh` cleans up stale signal files (sessions that no longer exist) as a side effect, keeping the signal directory tidy.
-- When no sessions need attention the script prints nothing, keeping `status-right` clean.
+- When no sessions need attention and no agents are running in the current session, the script prints nothing, keeping `status-right` clean.
 
 ## Future Enhancements
 - Per-session readiness timestamps so the indicator can show "1 new" vs "1 old".
